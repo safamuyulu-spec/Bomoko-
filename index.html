@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
 <title>Bomoko</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#FBF7F0;--ink:#1F1A14;--mut:#6B6258;--g:#0F6B4F;--s:#F2A900;--line:#DDD3C3;--bub:#EFE7D8;color-scheme:light}
+:root{--bg:#000;--ink:#F2EFE8;--mut:#A39B8F;--g:#0F6B4F;--gl:#4CC9A0;--s:#F2A900;--line:#2A2926;--bub:#1E1E1B;--bar:#111110;--in:#5A554D;color-scheme:dark}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:16px/1.4 Inter,system-ui,sans-serif}
@@ -15,34 +16,35 @@ button,input{font:inherit}
 button{cursor:pointer}
 button:focus-visible,input:focus-visible{outline:3px solid var(--s);outline-offset:2px}
 label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600}
-.top{display:flex;align-items:center;gap:8px;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;border-bottom:1px solid var(--line);background:#fff}
-.logo{font:700 30px 'Space Grotesk',sans-serif;color:var(--g);margin:0}
+.top{display:flex;align-items:center;gap:8px;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;border-bottom:1px solid var(--line);background:var(--bar)}
+.logo{font:700 30px 'Space Grotesk',sans-serif;color:var(--gl);margin:0}
 .big{font-size:48px}
 .body{flex:1;overflow-y:auto}
 .pad{padding:20px;display:flex;flex-direction:column;gap:14px}
 .auth{justify-content:center}
 .row{display:flex;align-items:center;gap:12px;padding:12px 16px;width:100%;border:0;background:none;text-align:left;color:inherit}
-.av{width:46px;height:46px;border-radius:50%;background:var(--s);display:flex;align-items:center;justify-content:center;font-weight:600;flex:none}
+.av{width:46px;height:46px;border-radius:50%;background:var(--s);display:flex;align-items:center;justify-content:center;font-weight:600;flex:none;color:#1F1A14;overflow:hidden}
+.av img{width:100%;height:100%;object-fit:cover}
 .grow{flex:1;min-width:0}
 .mut{color:var(--mut);font-size:14px}
 .ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.inp{width:100%;height:50px;border:1px solid #8A7F70;border-radius:12px;padding:0 14px;background:#fff;color:var(--ink)}
+.inp{width:100%;height:50px;border:1px solid var(--in);border-radius:12px;padding:0 14px;background:var(--bar);color:var(--ink)}
 .btn{height:50px;border:0;border-radius:14px;background:var(--g);color:#fff;font-weight:600;padding:0 18px}
 .btn:disabled{opacity:.5}
-.btn.alt{background:none;color:var(--g)}
-.tabs{display:flex;border-top:1px solid var(--line);background:#fff;padding-bottom:env(safe-area-inset-bottom)}
+.btn.alt{background:none;color:var(--gl)}
+.tabs{display:flex;border-top:1px solid var(--line);background:var(--bar);padding-bottom:env(safe-area-inset-bottom)}
 .tabs button{flex:1;height:60px;border:0;background:none;color:var(--mut);font-size:13px}
-.tabs .on{color:var(--g);font-weight:600}
+.tabs .on{color:var(--gl);font-weight:600}
 .msgs{padding:14px;display:flex;flex-direction:column;gap:8px}
 .b{max-width:78%;padding:9px 13px;border-radius:16px 16px 16px 4px;background:var(--bub);align-self:flex-start;overflow-wrap:anywhere;white-space:pre-wrap}
 .b.me{background:var(--g);color:#fff;align-self:flex-end;border-radius:16px 16px 4px 16px}
 .who{font-size:12px;color:var(--mut);margin:0 4px -4px}
-.bar{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:#fff}
+.bar{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bar)}
 .bar .inp{flex:1;min-width:0}
 .bar .btn{flex:none}
 .fab{position:absolute;right:18px;bottom:78px;width:56px;height:56px;border-radius:50%;border:0;background:var(--g);color:#fff;font-size:30px;line-height:1}
-.err{color:#B3261E;font-size:14px;min-height:18px}
-.toast{position:absolute;left:16px;right:16px;bottom:90px;background:var(--ink);color:#fff;padding:12px 14px;border-radius:12px;font-size:14px}
+.err{color:#FF8A80;font-size:14px;min-height:18px}
+.toast{position:absolute;left:16px;right:16px;bottom:90px;background:var(--ink);color:#111;padding:12px 14px;border-radius:12px;font-size:14px}
 </style>
 </head>
 <body>
@@ -74,6 +76,7 @@ function h(t, a, ...k) {
 const show = (...n) => $.replaceChildren(...n);
 const stop = () => { if (chan) { sb.removeChannel(chan); chan = null; } clearInterval(poll); };
 const ini = s => (s || "?").trim().charAt(0).toUpperCase();
+const av = (n, u, z) => h("div", { class: "av", style: z ? "width:" + z + "px;height:" + z + "px" + (z > 60 ? ";font-size:36px" : "") : null }, u ? h("img", { src: u, alt: "" }) : ini(n));
 const fmt = d => {
   const t = new Date(d), n = new Date();
   return t.toDateString() === n.toDateString()
@@ -122,7 +125,7 @@ function authView(signup = false) {
 }
 
 async function start() {
-  const { data } = await sb.from("profiles").select("display_name").eq("id", me.id).single();
+  const { data } = await sb.from("profiles").select("display_name,status,avatar_url").eq("id", me.id).single();
   profile = data || { display_name: "" };
   listView();
 }
@@ -139,7 +142,7 @@ async function listView() {
   if (!mine.length) { body.replaceChildren(h("p", { class: "mut pad" }, "Aucune discussion pour le moment. Appuie sur + pour écrire à quelqu’un.")); return; }
   const ids = mine.map(m => m.conversation_id);
   const [mem, last] = await Promise.all([
-    sb.from("conversation_members").select("conversation_id,user_id,profiles(display_name)").in("conversation_id", ids),
+    sb.from("conversation_members").select("conversation_id,user_id,profiles(display_name,avatar_url)").in("conversation_id", ids),
     sb.from("messages").select("conversation_id,body,created_at").in("conversation_id", ids).order("created_at", { ascending: false }).limit(300)
   ]);
   const lastBy = {};
@@ -147,11 +150,11 @@ async function listView() {
   const items = mine.map(m => {
     const c = m.conversations;
     const other = (mem.data || []).find(x => x.conversation_id === c.id && x.user_id !== me.id);
-    return { c, l: lastBy[c.id], title: c.is_group ? (c.name || "Groupe") : (other?.profiles?.display_name || "Discussion") };
+    return { c, l: lastBy[c.id], url: c.is_group ? null : other?.profiles?.avatar_url, title: c.is_group ? (c.name || "Groupe") : (other?.profiles?.display_name || "Discussion") };
   });
   items.sort((a, b) => new Date(b.l?.created_at || b.c.created_at) - new Date(a.l?.created_at || a.c.created_at));
-  body.replaceChildren(...items.map(i => h("button", { class: "row", onclick: () => chatView(i.c, i.title) },
-    h("div", { class: "av" }, ini(i.title)),
+  body.replaceChildren(...items.map(i => h("button", { class: "row", onclick: () => chatView(i.c, i.title, i.url) },
+    av(i.title, i.url),
     h("div", { class: "grow" },
       h("div", { class: "ell", style: "font-weight:600" }, i.title),
       h("div", { class: "mut ell" }, i.l ? i.l.body : "Aucun message")),
@@ -159,21 +162,23 @@ async function listView() {
 }
 
 // ---------- Conversation ----------
-async function chatView(c, title) {
+async function chatView(c, title, url) {
   stop();
   const list = h("div", { class: "msgs" });
   const box = h("div", { class: "body" }, list);
   const inp = h("input", { class: "inp", "aria-label": "Écrire un message", placeholder: "Écrire un message", maxlength: 4000 });
   const send = h("button", { class: "btn" }, "Envoyer");
+  const sub = h("div", { class: "mut ell" });
   show(h("div", { class: "top" },
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: listView }, "←"),
-      h("div", { class: "av", style: "width:40px;height:40px" }, ini(title)),
-      h("div", { class: "ell", style: "font-weight:600" }, title)),
+      av(title, url, 40),
+      h("div", { style: "min-width:0;flex:1" }, h("div", { class: "ell", style: "font-weight:600" }, title), sub)),
     box, h("div", { class: "bar" }, inp, send));
 
   const names = {};
-  const { data: mem } = await sb.from("conversation_members").select("user_id,profiles(display_name)").eq("conversation_id", c.id);
+  const { data: mem } = await sb.from("conversation_members").select("user_id,profiles(display_name,status)").eq("conversation_id", c.id);
   for (const m of mem || []) names[m.user_id] = m.profiles?.display_name || "";
+  if (!c.is_group) sub.textContent = (mem || []).find(m => m.user_id !== me.id)?.profiles?.status || "";
 
   const seen = new Set();
   let lastAt = null;
@@ -229,7 +234,7 @@ function newView() {
     const cb = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:#0F6B4F", checked: sel.has(p.id) });
     cb.onchange = () => { cb.checked ? sel.set(p.id, p) : sel.delete(p.id); upd(); };
     return h("label", { class: "row", style: "flex-direction:row;font-weight:400;font-size:16px;cursor:pointer" },
-      cb, h("div", { class: "av" }, ini(p.display_name)), p.display_name);
+      cb, av(p.display_name, p.avatar_url), h("div", { class: "grow", style: "min-width:0" }, h("div", {}, p.display_name), p.status && h("div", { class: "mut ell" }, p.status)));
   }));
   let tm;
   q.oninput = () => {
@@ -237,7 +242,7 @@ function newView() {
     tm = setTimeout(async () => {
       const s = q.value.trim().replace(/[%,()]/g, "");
       if (s.length < 2) { res.replaceChildren(); return; }
-      const { data } = await sb.from("profiles").select("id,display_name")
+      const { data } = await sb.from("profiles").select("id,display_name,status,avatar_url")
         .ilike("display_name", "%" + s + "%").neq("id", me.id).limit(20);
       draw(data || []);
     }, 300);
@@ -245,11 +250,11 @@ function newView() {
   go.onclick = async () => {
     go.disabled = true;
     const ids = [...sel.keys()];
-    let c, title;
+    let c, title, url;
     if (ids.length === 1) {
       const { data, error } = await sb.rpc("start_direct_chat", { other: ids[0] });
       if (error) { toast("Impossible de démarrer la discussion."); go.disabled = false; return; }
-      c = { id: data, is_group: false }; title = sel.get(ids[0]).display_name;
+      c = { id: data, is_group: false }; title = sel.get(ids[0]).display_name; url = sel.get(ids[0]).avatar_url;
     } else {
       const name = gname.value.trim();
       if (!name) { toast("Donne un nom au groupe."); go.disabled = false; return; }
@@ -259,7 +264,7 @@ function newView() {
       if (m.error) toast("Le groupe a été créé, mais sans tous les membres.");
       c = r.data; title = name;
     }
-    chatView(c, title);
+    chatView(c, title, url);
   };
   show(h("div", { class: "top" },
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: listView }, "←"),
@@ -271,19 +276,50 @@ function newView() {
 }
 
 // ---------- Profil ----------
+async function shrink(file) {
+  const u = URL.createObjectURL(file);
+  const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = u; });
+  const s = Math.min(img.width, img.height), c = document.createElement("canvas");
+  c.width = c.height = 256;
+  c.getContext("2d").drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 256, 256);
+  URL.revokeObjectURL(u);
+  return new Promise(ok => c.toBlob(ok, "image/jpeg", 0.85));
+}
 function profView() {
   stop();
   const nm = h("input", { class: "inp", value: profile?.display_name || "", maxlength: 40 });
+  const st = h("input", { class: "inp", value: profile?.status || "", maxlength: 80, placeholder: "Ex. : Disponible" });
   const msg = h("div", { class: "mut", role: "status" });
+  const pick = h("input", { type: "file", accept: "image/*", style: "display:none" });
+  pick.onchange = async () => {
+    const f = pick.files[0];
+    if (!f) return;
+    msg.textContent = "Envoi de la photo…";
+    try {
+      const blob = await shrink(f), path = me.id + "/avatar.jpg";
+      const up = await sb.storage.from("avatars").upload(path, blob, { upsert: true, contentType: "image/jpeg" });
+      if (up.error) throw up.error;
+      const url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl + "?v=" + Date.now();
+      const { error } = await sb.from("profiles").update({ avatar_url: url }).eq("id", me.id);
+      if (error) throw error;
+      profile.avatar_url = url;
+      profView();
+      toast("Photo enregistrée.");
+    } catch (e) { msg.textContent = "Impossible d’envoyer la photo. Réessaie."; }
+  };
   show(h("div", { class: "top" }, h("h1", { class: "logo" }, "Profil")),
     h("div", { class: "body pad" },
+      h("div", { style: "align-self:center" }, av(profile?.display_name, profile?.avatar_url, 96)),
+      pick,
+      h("button", { class: "btn alt", onclick: () => pick.click() }, "Changer la photo"),
       h("label", {}, "Ton nom", nm),
+      h("label", {}, "Statut", st),
       h("button", { class: "btn", onclick: async () => {
         const v = nm.value.trim();
         if (!v) return;
-        const { error } = await sb.from("profiles").update({ display_name: v }).eq("id", me.id);
+        const { error } = await sb.from("profiles").update({ display_name: v, status: st.value.trim() || null }).eq("id", me.id);
         if (error) msg.textContent = "Impossible d’enregistrer.";
-        else { profile.display_name = v; msg.textContent = "Nom enregistré."; }
+        else { profile.display_name = v; profile.status = st.value.trim(); msg.textContent = "Profil enregistré."; }
       } }, "Enregistrer"),
       msg,
       h("button", { class: "btn alt", onclick: () => sb.auth.signOut() }, "Se déconnecter")),
