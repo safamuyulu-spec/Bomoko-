@@ -333,9 +333,9 @@ async function statusView() {
     if (ph.length) await sb.storage.from("statuses").remove(ph);
     await sb.from("statuses").delete().in("id", old.map(x => x.id));
   }
-  const { data: rows, error } = await sb.from("statuses").select("*,profiles(display_name,avatar_url)")
+  const { data: rows, error } = await sb.from("statuses").select("*,profiles!author_id(display_name,avatar_url)")
     .gt("expires_at", now).order("created_at", { ascending: true }).limit(200);
-  if (error) { body.replaceChildren(h("p", { class: "err pad" }, "Impossible de charger les statuts. Vérifie ta connexion.")); return; }
+  if (error) { body.replaceChildren(h("p", { class: "err pad" }, "Impossible de charger les statuts. Vérifie ta connexion. (" + (error.message || "erreur inconnue") + ")")); return; }
   const byA = new Map();
   for (const s of rows) { if (!byA.has(s.author_id)) byA.set(s.author_id, []); byA.get(s.author_id).push(s); }
   const mine = byA.get(me.id) || [];
