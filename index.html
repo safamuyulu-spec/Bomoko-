@@ -44,6 +44,14 @@ label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600}
 .bar .btn{flex:none}
 .fab{position:absolute;right:18px;bottom:78px;width:56px;height:56px;border-radius:50%;border:0;background:var(--g);color:#fff;font-size:30px;line-height:1}
 .err{color:#FF8A80;font-size:14px;min-height:18px}
+.ov{position:absolute;inset:0;background:#000;z-index:5;display:flex;flex-direction:column}
+.ovb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;position:relative;overflow:hidden}
+.ovb img{max-width:100%;max-height:70%;object-fit:contain;border-radius:8px}
+.txt{font-size:26px;font-weight:600;text-align:center;overflow-wrap:anywhere;color:#fff;white-space:pre-wrap}
+.cap{margin-top:12px;text-align:center}
+.nav{position:absolute;top:0;bottom:0;width:50%;border:0;background:none}
+.toast{z-index:9}
+textarea{font:inherit}
 .toast{position:absolute;left:16px;right:16px;bottom:90px;background:var(--ink);color:#111;padding:12px 14px;border-radius:12px;font-size:14px}
 </style>
 </head>
@@ -94,6 +102,7 @@ const fr = m =>
 
 const tabs = on => h("nav", { class: "tabs" },
   h("button", { class: on === "l" ? "on" : "", onclick: listView }, "Discussions"),
+  h("button", { class: on === "s" ? "on" : "", onclick: statusView }, "Statuts"),
   h("button", { class: on === "p" ? "on" : "", onclick: profView }, "Profil"));
 
 // ---------- Connexion ----------
@@ -272,6 +281,185 @@ function newView() {
     h("div", { class: "body pad" },
       h("p", { class: "mut", style: "margin:0" }, "Choisis une personne pour écrire, ou plusieurs pour créer un groupe."),
       q, res, gname),
+    h("div", { class: "bar" }, go));
+}
+
+// ---------- Statuts (24 h) ----------
+const COLORS = ["#0F6B4F", "#8E3B46", "#3B5BA5", "#7A4EAB", "#2F2F2C"];
+async function fit(file, m) {
+  const u = URL.createObjectURL(file);
+  const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = u; });
+  const k = Math.min(1, m / Math.max(img.width, img.height)), c = document.createElement("canvas");
+  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(u);
+  return new Promise(ok => c.toBlob(ok, "image/jpeg", 0.8));
+}
+
+// Sélecteur de personnes (recherche par nom + cases à cocher)
+function picker(label) {
+  const sel = new Map();
+  const q = h("input", { class: "inp", type: "search", "aria-label": label, placeholder: label });
+  const res = h("div"), chips = h("div", { class: "mut" });
+  const upd = () => { chips.textContent = [...sel.values()].map(p => p.display_name).join(", "); };
+  const draw = rows => res.replaceChildren(...rows.map(p => {
+    const cb = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:#0F6B4F", checked: sel.has(p.id) });
+    cb.onchange = () => { cb.checked ? sel.set(p.id, p) : sel.delete(p.id); upd(); };
+    return h("label", { class: "row", style: "flex-direction:row;font-weight:400;font-size:16px;cursor:pointer" }, cb, av(p.display_name, p.avatar_url), p.display_name);
+  }));
+  let tm;
+  q.oninput = () => {
+    clearTimeout(tm);
+    tm = setTimeout(async () => {
+      const t = q.value.trim().replace(/[%,()]/g, "");
+      if (t.length < 2) { res.replaceChildren(); return; }
+      const { data } = await sb.from("profiles").select("id,display_name,avatar_url").ilike("display_name", "%" + t + "%").neq("id", me.id).limit(20);
+      draw(data || []);
+    }, 300);
+  };
+  return { sel, el: h("div", { style: "display:flex;flex-direction:column;gap:8px" }, q, chips, res) };
+}
+
+async function statusView() {
+  stop();
+  const body = h("div", { class: "body" }, h("p", { class: "mut pad" }, "Chargement…"));
+  show(h("div", { class: "top" }, h("h1", { class: "logo" }, "Statuts")), body,
+    h("button", { class: "fab", "aria-label": "Publier un statut", onclick: composeView }, "+"), tabs("s"));
+  const now = new Date().toISOString();
+  // Nettoyage de mes statuts expirés (photos comprises)
+  const { data: old } = await sb.from("statuses").select("id,media_path").eq("author_id", me.id).lt("expires_at", now);
+  if (old && old.length) {
+    const ph = old.map(x => x.media_path).filter(Boolean);
+    if (ph.length) await sb.storage.from("statuses").remove(ph);
+    await sb.from("statuses").delete().in("id", old.map(x => x.id));
+  }
+  const { data: rows, error } = await sb.from("statuses").select("*,profiles(display_name,avatar_url)")
+    .gt("expires_at", now).order("created_at", { ascending: true }).limit(200);
+  if (error) { body.replaceChildren(h("p", { class: "err pad" }, "Impossible de charger les statuts. Vérifie ta connexion.")); return; }
+  const byA = new Map();
+  for (const s of rows) { if (!byA.has(s.author_id)) byA.set(s.author_id, []); byA.get(s.author_id).push(s); }
+  const mine = byA.get(me.id) || [];
+  byA.delete(me.id);
+  const ids = rows.filter(s => s.author_id !== me.id).map(s => s.id);
+  const seen = new Set();
+  if (ids.length) {
+    const { data } = await sb.from("status_views").select("status_id").eq("viewer_id", me.id).in("status_id", ids);
+    (data || []).forEach(v => seen.add(v.status_id));
+  }
+  const ring = (u, n, on) => h("div", { style: "padding:2px;border-radius:50%;border:3px solid " + (on ? "#4CC9A0" : "#555") }, av(n, u, 46));
+  const groups = [...byA.values()].sort((a, b) => new Date(b[b.length - 1].created_at) - new Date(a[a.length - 1].created_at));
+  const els = groups.map(g => {
+    const k = g.findIndex(s => !seen.has(s.id)), last = g[g.length - 1];
+    return h("button", { class: "row", onclick: () => openStatus(g, k < 0 ? 0 : k) },
+      ring(last.profiles?.avatar_url, last.profiles?.display_name, k >= 0),
+      h("div", { class: "grow" }, h("div", { style: "font-weight:600" }, last.profiles?.display_name || "Utilisateur"), h("div", { class: "mut" }, fmt(last.created_at))));
+  });
+  body.replaceChildren(
+    h("button", { class: "row", onclick: () => mine.length ? openStatus(mine, 0) : composeView() },
+      ring(profile?.avatar_url, profile?.display_name, false),
+      h("div", { class: "grow" }, h("div", { style: "font-weight:600" }, "Mon statut"),
+        h("div", { class: "mut" }, mine.length ? mine.length + " statut(s) actif(s)" : "Appuie pour publier"))),
+    h("div", { class: "mut", style: "padding:8px 16px" }, "Récents"),
+    ...(els.length ? els : [h("p", { class: "mut pad" }, "Aucun statut récent.")]));
+}
+
+async function openStatus(list, i = 0) {
+  const s = list[i], mine = s.author_id === me.id;
+  const name = mine ? "Mon statut" : (s.profiles?.display_name || "Utilisateur");
+  const ov = h("div", { class: "ov" });
+  const close = () => { ov.remove(); statusView(); };
+  const go = k => { ov.remove(); if (k >= list.length) return statusView(); openStatus(list, Math.max(0, k)); };
+  const bodyEl = h("div", { class: "ovb", style: s.kind === "text" ? "background:" + s.bg : null });
+  const foot = h("div", { class: "mut", style: "padding:10px 14px calc(10px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px" });
+  ov.append(
+    h("div", { style: "display:flex;gap:4px;padding:calc(8px + env(safe-area-inset-top)) 12px 0" },
+      list.map((_, k) => h("div", { style: "flex:1;height:3px;border-radius:2px;background:" + (k <= i ? "#fff" : "#555") }))),
+    h("div", { class: "top", style: "background:none;border:0" },
+      av(name, mine ? profile?.avatar_url : s.profiles?.avatar_url, 40),
+      h("div", { style: "flex:1;min-width:0" }, h("div", { class: "ell", style: "font-weight:600" }, name), h("div", { class: "mut" }, fmt(s.created_at))),
+      h("button", { class: "btn alt", "aria-label": "Fermer", style: "padding:0 10px", onclick: close }, "✕")),
+    bodyEl, foot);
+  $.append(ov);
+  if (s.kind === "text") bodyEl.append(h("div", { class: "txt" }, s.body));
+  else {
+    const { data } = await sb.storage.from("statuses").createSignedUrl(s.media_path, 3600);
+    bodyEl.append(data ? h("img", { src: data.signedUrl, alt: s.body || "Photo du statut" }) : h("div", { class: "txt" }, "Photo indisponible"),
+      s.body && h("div", { class: "cap" }, s.body));
+  }
+  bodyEl.append(
+    h("button", { class: "nav", style: "left:0", "aria-label": "Précédent", onclick: () => go(i - 1) }),
+    h("button", { class: "nav", style: "right:0", "aria-label": "Suivant", onclick: () => go(i + 1) }));
+  const [mn, vw] = await Promise.all([
+    sb.from("status_mentions").select("profiles(display_name)").eq("status_id", s.id),
+    mine ? sb.from("status_views").select("viewed_at,profiles(display_name)").eq("status_id", s.id).order("viewed_at") : null]);
+  const ms = (mn.data || []).map(m => m.profiles?.display_name).filter(Boolean);
+  if (ms.length) foot.append(h("div", {}, "Mentionne : " + ms.join(", ")));
+  if (mine) {
+    const v = (vw && vw.data) || [];
+    foot.append(h("div", {}, "Vu par " + v.length + (v.length ? " : " + v.map(x => x.profiles?.display_name).join(", ") : "")),
+      h("button", { class: "btn alt", onclick: async () => {
+        await sb.from("statuses").delete().eq("id", s.id);
+        if (s.media_path) await sb.storage.from("statuses").remove([s.media_path]);
+        close();
+      } }, "Supprimer ce statut"));
+  } else sb.from("status_views").upsert({ status_id: s.id, viewer_id: me.id }, { onConflict: "status_id,viewer_id", ignoreDuplicates: true });
+}
+
+function composeView() {
+  stop();
+  let kind = "text", bg = COLORS[0], file = null;
+  const ta = h("textarea", { class: "inp", maxlength: 700, "aria-label": "Texte du statut", placeholder: "Écris ton statut…", style: "height:150px;padding:12px;font-size:20px;resize:none;background:" + bg });
+  const sw = h("div", { style: "display:flex;gap:10px" }, COLORS.map(c => h("button", { "aria-label": "Couleur de fond " + c, style: "width:36px;height:36px;border-radius:50%;border:2px solid #fff;background:" + c, onclick: () => { bg = c; ta.style.background = c; } })));
+  const pick = h("input", { type: "file", accept: "image/*", style: "display:none" });
+  const prev = h("img", { alt: "Aperçu de la photo", style: "max-width:100%;max-height:260px;border-radius:12px;display:none;align-self:center" });
+  pick.onchange = () => { file = pick.files[0]; if (file) { prev.src = URL.createObjectURL(file); prev.style.display = "block"; } };
+  const cap = h("input", { class: "inp", maxlength: 300, "aria-label": "Légende", placeholder: "Légende (facultatif)" });
+  const photoBox = h("div", { style: "display:none;flex-direction:column;gap:10px" }, h("button", { class: "btn alt", onclick: () => pick.click() }, "Choisir une photo"), pick, prev, cap);
+  const textBox = h("div", { style: "display:flex;flex-direction:column;gap:10px" }, ta, sw);
+  const tK = h("button", { class: "btn", style: "flex:1" }, "Texte"), pK = h("button", { class: "btn alt", style: "flex:1" }, "Photo");
+  const setKind = k => { kind = k; textBox.style.display = k === "text" ? "flex" : "none"; photoBox.style.display = k === "photo" ? "flex" : "none"; tK.className = "btn" + (k === "text" ? "" : " alt"); pK.className = "btn" + (k === "photo" ? "" : " alt"); };
+  tK.onclick = () => setKind("text"); pK.onclick = () => setKind("photo");
+  const aud = h("select", { class: "inp", "aria-label": "Qui peut voir ce statut ?" },
+    ["contacts|Mes contacts", "everyone|Tout le monde sur Bomoko", "contacts_except|Mes contacts, sauf…", "selected|Seulement certaines personnes", "only_me|Moi seulement"]
+      .map(o => h("option", { value: o.split("|")[0] }, o.split("|")[1])));
+  const who = picker("Chercher les personnes"), men = picker("Mentionner des personnes");
+  const whoBox = h("div", { style: "display:none;flex-direction:column;gap:8px" }, h("div", { class: "mut" }, "Choisis les personnes (exclues ou seules autorisées selon ton choix)"), who.el);
+  aud.onchange = () => { whoBox.style.display = ["contacts_except", "selected"].includes(aud.value) ? "flex" : "none"; };
+  const go = h("button", { class: "btn", style: "flex:1" }, "Publier");
+  go.onclick = async () => {
+    const a = aud.value, ids = [...who.sel.keys()], text = ta.value.trim();
+    if (kind === "text" && !text) return toast("Écris quelque chose.");
+    if (kind === "photo" && !file) return toast("Choisis une photo.");
+    if (a === "selected" && !ids.length) return toast("Choisis au moins une personne.");
+    go.disabled = true;
+    try {
+      const row = { author_id: me.id, kind, audience: a };
+      if (kind === "text") { row.body = text; row.bg = bg; }
+      else {
+        const blob = await fit(file, 1280), path = me.id + "/" + crypto.randomUUID() + ".jpg";
+        const up = await sb.storage.from("statuses").upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) throw up.error;
+        row.media_path = path; row.body = cap.value.trim() || null;
+      }
+      const r = await sb.from("statuses").insert(row).select().single();
+      if (r.error) throw r.error;
+      const extra = [];
+      if (["contacts_except", "selected"].includes(a) && ids.length) extra.push(sb.from("status_audience").insert(ids.map(u => ({ status_id: r.data.id, user_id: u }))));
+      if (men.sel.size) extra.push(sb.from("status_mentions").insert([...men.sel.keys()].map(u => ({ status_id: r.data.id, user_id: u }))));
+      const res = await Promise.all(extra);
+      if (res.some(x => x.error)) { await sb.from("statuses").delete().eq("id", r.data.id); throw new Error("public"); }
+      statusView();
+      toast("Statut publié.");
+    } catch (e) { go.disabled = false; toast("Publication impossible. Réessaie."); }
+  };
+  setKind("text");
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: statusView }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, "Nouveau statut")),
+    h("div", { class: "body pad" },
+      h("div", { style: "display:flex;gap:8px" }, tK, pK), textBox, photoBox,
+      h("label", {}, "Qui peut le voir ?", aud), whoBox,
+      h("div", { class: "mut" }, "Mentionner (facultatif)"), men.el),
     h("div", { class: "bar" }, go));
 }
 
