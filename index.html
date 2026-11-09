@@ -389,20 +389,59 @@ async function openStatus(list, i = 0) {
   bodyEl.append(
     h("button", { class: "nav", style: "left:0", "aria-label": "Précédent", onclick: () => go(i - 1) }),
     h("button", { class: "nav", style: "right:0", "aria-label": "Suivant", onclick: () => go(i + 1) }));
-  const [mn, vw] = await Promise.all([
+  const [mn, vw, lk] = await Promise.all([
     sb.from("status_mentions").select("profiles(display_name)").eq("status_id", s.id),
-    mine ? sb.from("status_views").select("viewed_at,profiles(display_name)").eq("status_id", s.id).order("viewed_at") : null]);
+    mine ? sb.from("status_views").select("viewed_at,profiles(display_name)").eq("status_id", s.id).order("viewed_at") : null,
+    sb.from("status_likes").select("user_id,profiles(display_name)").eq("status_id", s.id)]);
   const ms = (mn.data || []).map(m => m.profiles?.display_name).filter(Boolean);
   if (ms.length) foot.append(h("div", {}, "Mentionne : " + ms.join(", ")));
   if (mine) {
     const v = (vw && vw.data) || [];
+    if ((lk.data || []).length) foot.append(h("div", {}, "♥ " + lk.data.length + " : " + lk.data.map(x => x.profiles?.display_name).join(", ")));
     foot.append(h("div", {}, "Vu par " + v.length + (v.length ? " : " + v.map(x => x.profiles?.display_name).join(", ") : "")),
       h("button", { class: "btn alt", onclick: async () => {
         await sb.from("statuses").delete().eq("id", s.id);
         if (s.media_path) await sb.storage.from("statuses").remove([s.media_path]);
         close();
       } }, "Supprimer ce statut"));
-  } else sb.from("status_views").upsert({ status_id: s.id, viewer_id: me.id }, { onConflict: "status_id,viewer_id", ignoreDuplicates: true });
+  } else {
+    await sb.from("status_views").upsert({ status_id: s.id, viewer_id: me.id }, { onConflict: "status_id,viewer_id", ignoreDuplicates: true });
+    let liked = (lk.data || []).some(x => x.user_id === me.id);
+    const lb = h("button", { class: "btn alt", "aria-label": "J’aime", "aria-pressed": String(liked), style: "padding:0 12px;font-size:22px" }, liked ? "♥" : "♡");
+    lb.onclick = async () => {
+      lb.disabled = true;
+      const r = liked
+        ? await sb.from("status_likes").delete().eq("status_id", s.id).eq("user_id", me.id)
+        : await sb.from("status_likes").insert({ status_id: s.id, user_id: me.id });
+      if (r.error) toast("Action impossible. Réessaie.");
+      else { liked = !liked; lb.textContent = liked ? "♥" : "♡"; lb.setAttribute("aria-pressed", String(liked)); }
+      lb.disabled = false;
+    };
+    const rin = h("input", { class: "inp", "aria-label": "Répondre au statut", placeholder: "Répondre à " + name + "…", maxlength: 500 });
+    const rsend = h("button", { class: "btn" }, "Envoyer");
+    rsend.onclick = async () => {
+      const t = rin.value.trim();
+      if (!t) return;
+      rsend.disabled = true;
+      const { data, error } = await sb.rpc("start_direct_chat", { other: s.author_id });
+      if (error) toast("Impossible d’écrire à cette personne.");
+      else {
+        const q = (s.kind === "text" ? s.body : (s.body || "photo")) || "";
+        const m = await sb.from("messages").insert({ conversation_id: data, sender_id: me.id, body: "↩ Statut : « " + q.slice(0, 60) + (q.length > 60 ? "…" : "") + " »\n" + t });
+        if (m.error) toast("Message non envoyé. Réessaie.");
+        else { rin.value = ""; toast("Réponse envoyée."); }
+      }
+      rsend.disabled = false;
+    };
+    const toChat = async () => {
+      const { data, error } = await sb.rpc("start_direct_chat", { other: s.author_id });
+      if (error) return toast("Impossible d’ouvrir la discussion.");
+      ov.remove();
+      chatView({ id: data, is_group: false }, name, s.profiles?.avatar_url);
+    };
+    foot.append(h("div", { style: "display:flex;gap:8px;align-items:center" }, rin, rsend, lb),
+      h("button", { class: "btn alt", onclick: toChat }, "Ouvrir la discussion avec " + name));
+  }
 }
 
 function composeView() {
