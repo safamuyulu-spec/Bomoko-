@@ -57,6 +57,7 @@ textarea{font:inherit}
 </head>
 <body>
 <div id="app"></div>
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.22.2.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script>
 const $ = document.getElementById("app");
@@ -136,6 +137,7 @@ function authView(signup = false) {
 async function start() {
   const { data } = await sb.from("profiles").select("display_name,status,avatar_url").eq("id", me.id).single();
   profile = data || { display_name: "" };
+  listenCalls();
   listView();
 }
 
@@ -178,10 +180,12 @@ async function chatView(c, title, url) {
   const inp = h("input", { class: "inp", "aria-label": "Écrire un message", placeholder: "Écrire un message", maxlength: 4000 });
   const send = h("button", { class: "btn" }, "Envoyer");
   const sub = h("div", { class: "mut ell" });
+  const callBtn = k => c.is_group ? null : h("button", { class: "btn alt", "aria-label": k === "audio" ? "Appel audio" : "Appel vidéo", style: "padding:0 10px;font-size:20px", onclick: () => startCall(c, title, url, k) }, k === "audio" ? "📞" : "📹");
   show(h("div", { class: "top" },
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: listView }, "←"),
       av(title, url, 40),
-      h("div", { style: "min-width:0;flex:1" }, h("div", { class: "ell", style: "font-weight:600" }, title), sub)),
+      h("div", { style: "min-width:0;flex:1" }, h("div", { class: "ell", style: "font-weight:600" }, title), sub),
+      callBtn("audio"), callBtn("video")),
     box, h("div", { class: "bar" }, inp, send));
 
   const names = {};
@@ -283,6 +287,147 @@ function newView() {
       q, res, gname),
     h("div", { class: "bar" }, go));
 }
+
+// ---------- Appels audio et vidéo (à deux) ----------
+let cur = null, inc = null, callChan = null, callPoll = null, ringAc = null, ringTimer = null;
+const seenCalls = new Set();
+
+function ringtone(on) {
+  clearInterval(ringTimer); ringTimer = null;
+  if (ringAc) { try { ringAc.close(); } catch (e) {} ringAc = null; }
+  if (!on) return;
+  try {
+    ringAc = new (window.AudioContext || window.webkitAudioContext)();
+    const beep = () => {
+      const o = ringAc.createOscillator(), g = ringAc.createGain();
+      o.frequency.value = 440; g.gain.value = 0.15; o.connect(g); g.connect(ringAc.destination);
+      o.start(); setTimeout(() => { try { o.stop(); } catch (e) {} }, 400);
+      if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+    };
+    beep(); ringTimer = setInterval(beep, 1800);
+  } catch (e) {}
+}
+
+async function startCall(c, title, url, kind) {
+  if (cur) return toast("Tu es déjà en appel.");
+  if (!window.AgoraRTC) return toast("Appels indisponibles pour le moment.");
+  const { data: mem } = await sb.from("conversation_members").select("user_id").eq("conversation_id", c.id).neq("user_id", me.id).limit(1);
+  const callee = mem && mem[0] && mem[0].user_id;
+  if (!callee) return toast("Impossible d’appeler cette personne.");
+  const { data: call, error } = await sb.from("calls").insert({ conversation_id: c.id, caller_id: me.id, callee_id: callee, kind }).select().single();
+  if (error) return toast("Impossible de lancer l’appel.");
+  runCall(call, title, url, true);
+}
+
+async function runCall(call, name, url, isCaller) {
+  const video = call.kind === "video";
+  const stat = h("div", { class: "mut", role: "status" }, isCaller ? "Sonnerie…" : "Connexion…");
+  const remote = h("div", { style: "position:absolute;inset:0;background:#000" });
+  const local = h("div", { style: "position:absolute;right:12px;top:calc(12px + env(safe-area-inset-top));width:96px;height:128px;border-radius:10px;overflow:hidden;background:#222;z-index:1;display:" + (video ? "block" : "none") });
+  const head = h("div", { style: "position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:calc(40px + env(safe-area-inset-top)) 16px 0" },
+    av(name, url, 96), h("div", { style: "font-size:22px;font-weight:600" }, name), stat);
+  const mic = h("button", { class: "btn", "aria-label": "Micro", style: "flex:1" }, "Micro");
+  const cam = h("button", { class: "btn", "aria-label": "Caméra", style: "flex:1;display:" + (video ? "block" : "none") }, "Caméra");
+  const end = h("button", { class: "btn", style: "flex:1;background:#B3261E" }, "Raccrocher");
+  const ov = h("div", { class: "ov", role: "dialog", "aria-label": "Appel", style: "z-index:8" }, remote, local, head,
+    h("div", { style: "position:relative;margin-top:auto;display:flex;gap:10px;padding:16px 16px calc(16px + env(safe-area-inset-bottom))" }, mic, cam, end));
+  $.append(ov);
+
+  const st = cur = { tracks: [], timers: [], client: null, done: false, answered: false };
+  const cleanup = async (status, msg) => {
+    if (st.done) return;
+    st.done = true; st.timers.forEach(t => { clearInterval(t); clearTimeout(t); });
+    try { st.tracks.forEach(t => { t.stop(); t.close(); }); if (st.client) await st.client.leave(); } catch (e) {}
+    if (status) await sb.from("calls").update({ status, ended_at: new Date().toISOString() }).eq("id", call.id).in("status", ["ringing", "active"]);
+    ov.remove(); cur = null;
+    if (msg) toast(msg);
+  };
+  end.onclick = () => cleanup("ended");
+
+  try {
+    const { data, error } = await sb.functions.invoke("agora-token", { body: { call_id: call.id } });
+    if (error || !data || !data.token) throw new Error("jeton");
+    const client = st.client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+    client.on("user-published", async (u, type) => {
+      await client.subscribe(u, type);
+      if (type === "video" && u.videoTrack) { u.videoTrack.play(remote); head.style.display = "none"; }
+      if (type === "audio" && u.audioTrack) u.audioTrack.play();
+      if (!st.answered) {
+        st.answered = true;
+        const t0 = Date.now();
+        st.timers.push(setInterval(() => {
+          const sec = Math.floor((Date.now() - t0) / 1000);
+          stat.textContent = "En communication · " + String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0");
+        }, 1000));
+      }
+    });
+    client.on("user-left", () => cleanup("ended", "L’appel est terminé."));
+    await client.join(data.appId, data.channel, data.token, data.uid);
+    const mt = await AgoraRTC.createMicrophoneAudioTrack();
+    st.tracks.push(mt);
+    let vt = null;
+    if (video) { vt = await AgoraRTC.createCameraVideoTrack({ encoderConfig: "360p_1" }); st.tracks.push(vt); vt.play(local); }
+    await client.publish(vt ? [mt, vt] : [mt]);
+    let mOn = true, cOn = true;
+    mic.onclick = async () => { mOn = !mOn; await mt.setEnabled(mOn); mic.textContent = mOn ? "Micro" : "Micro coupé"; };
+    cam.onclick = async () => { if (!vt) return; cOn = !cOn; await vt.setEnabled(cOn); cam.textContent = cOn ? "Caméra" : "Caméra coupée"; };
+  } catch (e) {
+    return cleanup("ended", "Impossible de démarrer l’appel. Vérifie que le micro (et la caméra) sont autorisés.");
+  }
+  // Suivre l'état de l'appel : refus, fin, ou pas de réponse
+  st.timers.push(setInterval(async () => {
+    const { data: r } = await sb.from("calls").select("status").eq("id", call.id).single();
+    if (!r) return;
+    if (r.status === "declined") cleanup(null, "Appel refusé.");
+    else if (["ended", "missed"].includes(r.status)) cleanup(null, "L’appel est terminé.");
+  }, 2500));
+  if (isCaller) st.timers.push(setTimeout(() => { if (!st.answered) cleanup("missed", "Pas de réponse."); }, 40000));
+}
+
+async function incoming(call) {
+  if (cur || inc || seenCalls.has(call.id)) return;
+  seenCalls.add(call.id);
+  const { data: p } = await sb.from("profiles").select("display_name,avatar_url").eq("id", call.caller_id).single();
+  const name = (p && p.display_name) || "Utilisateur", url = p && p.avatar_url;
+  let poll, tm;
+  const close = () => { clearInterval(poll); clearTimeout(tm); ringtone(false); ov.remove(); inc = null; };
+  const refuse = h("button", { class: "btn", style: "flex:1;background:#B3261E" }, "Refuser");
+  const accept = h("button", { class: "btn", style: "flex:1" }, "Répondre");
+  const ov = inc = h("div", { class: "ov", role: "alertdialog", "aria-label": "Appel entrant", style: "z-index:8;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px" },
+    av(name, url, 96), h("div", { style: "font-size:24px;font-weight:600" }, name),
+    h("div", { class: "mut" }, call.kind === "video" ? "Appel vidéo entrant…" : "Appel audio entrant…"),
+    h("div", { style: "display:flex;gap:10px;width:100%;margin-top:20px" }, refuse, accept));
+  $.append(ov);
+  ringtone(true);
+  refuse.onclick = async () => { await sb.from("calls").update({ status: "declined", ended_at: new Date().toISOString() }).eq("id", call.id).eq("status", "ringing"); close(); };
+  accept.onclick = async () => {
+    accept.disabled = true;
+    const { data } = await sb.from("calls").update({ status: "active", answered_at: new Date().toISOString() }).eq("id", call.id).eq("status", "ringing").select("id");
+    close();
+    if (!data || !data.length) return toast("L’appel est déjà terminé.");
+    runCall(call, name, url, false);
+  };
+  poll = setInterval(async () => {
+    const { data: r } = await sb.from("calls").select("status").eq("id", call.id).single();
+    if (r && r.status !== "ringing") close();
+  }, 2500);
+  tm = setTimeout(close, 45000);
+}
+
+function listenCalls() {
+  stopCalls();
+  const check = async () => {
+    const { data } = await sb.from("calls").select("*").eq("callee_id", me.id).eq("status", "ringing")
+      .gt("created_at", new Date(Date.now() - 60000).toISOString()).order("created_at", { ascending: false }).limit(1);
+    if (data && data[0]) incoming(data[0]);
+  };
+  callChan = sb.channel("calls-in")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "calls", filter: "callee_id=eq." + me.id }, pl => { if (pl.new.status === "ringing") incoming(pl.new); })
+    .subscribe();
+  callPoll = setInterval(check, 5000);
+  check();
+}
+function stopCalls() { if (callChan) { sb.removeChannel(callChan); callChan = null; } clearInterval(callPoll); }
 
 // ---------- Statuts (24 h) ----------
 const COLORS = ["#0F6B4F", "#8E3B46", "#3B5BA5", "#7A4EAB", "#2F2F2C"];
@@ -555,7 +700,7 @@ function profView() {
 
 // ---------- Démarrage ----------
 sb.auth.onAuthStateChange((ev, s) => {
-  if (!s) { me = null; profile = null; authView(); return; }
+  if (!s) { stopCalls(); me = null; profile = null; authView(); return; }
   if (!me) { me = s.user; setTimeout(start, 0); }
 });
 </script>
