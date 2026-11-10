@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bomoko">
 <title>Bomoko</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
 <style>
@@ -333,10 +339,11 @@ async function runCall(call, name, url, isCaller) {
     h("div", { style: "position:relative;margin-top:auto;display:flex;gap:10px;padding:16px 16px calc(16px + env(safe-area-inset-bottom))" }, mic, cam, end));
   $.append(ov);
 
-  const st = cur = { tracks: [], timers: [], client: null, done: false, answered: false };
+  const st = cur = { tracks: [], timers: [], client: null, rc: null, done: false, answered: false, joining: false };
   const cleanup = async (status, msg) => {
     if (st.done) return;
     st.done = true; st.timers.forEach(t => { clearInterval(t); clearTimeout(t); });
+    if (st.rc) sb.removeChannel(st.rc);
     try { st.tracks.forEach(t => { t.stop(); t.close(); }); if (st.client) await st.client.leave(); } catch (e) {}
     if (status) await sb.from("calls").update({ status, ended_at: new Date().toISOString() }).eq("id", call.id).in("status", ["ringing", "active"]);
     ov.remove(); cur = null;
@@ -344,44 +351,58 @@ async function runCall(call, name, url, isCaller) {
   };
   end.onclick = () => cleanup("ended");
 
-  try {
-    const { data, error } = await sb.functions.invoke("agora-token", { body: { call_id: call.id } });
-    if (error || !data || !data.token) throw new Error("jeton");
-    const client = st.client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-    client.on("user-published", async (u, type) => {
-      await client.subscribe(u, type);
-      if (type === "video" && u.videoTrack) { u.videoTrack.play(remote); head.style.display = "none"; }
-      if (type === "audio" && u.audioTrack) u.audioTrack.play();
-      if (!st.answered) {
-        st.answered = true;
-        const t0 = Date.now();
-        st.timers.push(setInterval(() => {
-          const sec = Math.floor((Date.now() - t0) / 1000);
-          stat.textContent = "En communication · " + String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0");
-        }, 1000));
-      }
-    });
-    client.on("user-left", () => cleanup("ended", "L’appel est terminé."));
-    await client.join(data.appId, data.channel, data.token, data.uid);
-    const mt = await AgoraRTC.createMicrophoneAudioTrack();
-    st.tracks.push(mt);
-    let vt = null;
-    if (video) { vt = await AgoraRTC.createCameraVideoTrack({ encoderConfig: "360p_1" }); st.tracks.push(vt); vt.play(local); }
-    await client.publish(vt ? [mt, vt] : [mt]);
-    let mOn = true, cOn = true;
-    mic.onclick = async () => { mOn = !mOn; await mt.setEnabled(mOn); mic.textContent = mOn ? "Micro" : "Micro coupé"; };
-    cam.onclick = async () => { if (!vt) return; cOn = !cOn; await vt.setEnabled(cOn); cam.textContent = cOn ? "Caméra" : "Caméra coupée"; };
-  } catch (e) {
-    return cleanup("ended", "Impossible de démarrer l’appel. Vérifie que le micro (et la caméra) sont autorisés.");
-  }
-  // Suivre l'état de l'appel : refus, fin, ou pas de réponse
+  // Le décompte ne démarre que lorsque la personne appelée a décroché
+  const startTimer = () => {
+    if (st.answered) return;
+    st.answered = true;
+    const t0 = Date.now();
+    const tick = () => {
+      const sec = Math.floor((Date.now() - t0) / 1000);
+      stat.textContent = "En communication · " + String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0");
+    };
+    tick(); st.timers.push(setInterval(tick, 1000));
+  };
+  // L'appelant ne rejoint l'appel (et ne consomme des minutes) qu'après la réponse
+  const join = async () => {
+    try {
+      const { data, error } = await sb.functions.invoke("agora-token", { body: { call_id: call.id } });
+      if (error || !data || !data.token) throw new Error("jeton");
+      const client = st.client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+      client.on("user-published", async (u, type) => {
+        await client.subscribe(u, type);
+        if (type === "video" && u.videoTrack) { u.videoTrack.play(remote); head.style.display = "none"; }
+        if (type === "audio" && u.audioTrack) u.audioTrack.play();
+      });
+      client.on("user-left", () => cleanup("ended", "L’appel est terminé."));
+      await client.join(data.appId, data.channel, data.token, data.uid);
+      const mt = await AgoraRTC.createMicrophoneAudioTrack();
+      st.tracks.push(mt);
+      let vt = null;
+      if (video) { vt = await AgoraRTC.createCameraVideoTrack({ encoderConfig: "360p_1" }); st.tracks.push(vt); vt.play(local); }
+      await client.publish(vt ? [mt, vt] : [mt]);
+      let mOn = true, cOn = true;
+      mic.onclick = async () => { mOn = !mOn; await mt.setEnabled(mOn); mic.textContent = mOn ? "Micro" : "Micro coupé"; };
+      cam.onclick = async () => { if (!vt) return; cOn = !cOn; await vt.setEnabled(cOn); cam.textContent = cOn ? "Caméra" : "Caméra coupée"; };
+    } catch (e) {
+      cleanup("ended", "Impossible de démarrer l’appel. Vérifie que le micro (et la caméra) sont autorisés.");
+    }
+  };
+  const begin = () => { if (st.joining) return; st.joining = true; startTimer(); join(); };
+  const handle = s => {
+    if (s === "active" && isCaller) begin();
+    else if (s === "declined") cleanup(null, "Appel refusé.");
+    else if (s === "ended" || s === "missed") cleanup(null, "L’appel est terminé.");
+  };
+  // Suivre l'état de l'appel : réponse, refus, fin (temps réel + vérification régulière)
+  st.rc = sb.channel("call-" + call.id)
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calls", filter: "id=eq." + call.id }, pl => handle(pl.new.status))
+    .subscribe();
   st.timers.push(setInterval(async () => {
     const { data: r } = await sb.from("calls").select("status").eq("id", call.id).single();
-    if (!r) return;
-    if (r.status === "declined") cleanup(null, "Appel refusé.");
-    else if (["ended", "missed"].includes(r.status)) cleanup(null, "L’appel est terminé.");
-  }, 2500));
+    if (r) handle(r.status);
+  }, 1500));
   if (isCaller) st.timers.push(setTimeout(() => { if (!st.answered) cleanup("missed", "Pas de réponse."); }, 40000));
+  else begin();
 }
 
 async function incoming(call) {
@@ -697,6 +718,9 @@ function profView() {
       h("button", { class: "btn alt", onclick: () => sb.auth.signOut() }, "Se déconnecter")),
     tabs("p"));
 }
+
+// ---------- Installation sur l'écran d'accueil ----------
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
 // ---------- Démarrage ----------
 sb.auth.onAuthStateChange((ev, s) => {
