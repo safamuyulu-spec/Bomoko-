@@ -151,12 +151,14 @@ async function start() {
 async function listView() {
   stop();
   const body = h("div", { class: "body" }, h("p", { class: "mut pad" }, "Chargement…"));
-  show(h("div", { class: "top" }, h("h1", { class: "logo" }, "Bomoko")), body,
+  show(h("div", { class: "top" }, h("h1", { class: "logo" }, "Bomoko"), h("button", { id: "fb", class: "btn alt", style: "margin-left:auto;padding:0 10px", onclick: newView }, "Amis")), body,
     h("button", { class: "fab", "aria-label": "Nouvelle discussion", onclick: newView }, "+"), tabs("l"));
+  sb.from("friendships").select("id", { count: "exact", head: true }).eq("addressee_id", me.id).eq("status", "pending")
+    .then(r => { const b = document.getElementById("fb"); if (b && r.count) b.textContent = "Amis (" + r.count + ")"; });
   const { data: mine, error } = await sb.from("conversation_members")
     .select("conversation_id,conversations(id,is_group,name,created_at)").eq("user_id", me.id);
   if (error) { body.replaceChildren(h("p", { class: "err pad" }, "Impossible de charger tes discussions. Vérifie ta connexion.")); return; }
-  if (!mine.length) { body.replaceChildren(h("p", { class: "mut pad" }, "Aucune discussion pour le moment. Appuie sur + pour écrire à quelqu’un.")); return; }
+  if (!mine.length) { body.replaceChildren(h("p", { class: "mut pad" }, "Aucune discussion pour le moment. Appuie sur + pour ajouter des amis et commencer à discuter.")); return; }
   const ids = mine.map(m => m.conversation_id);
   const [mem, last] = await Promise.all([
     sb.from("conversation_members").select("conversation_id,user_id,profiles(display_name,avatar_url)").in("conversation_id", ids),
@@ -201,6 +203,31 @@ async function chatView(c, title, url) {
 
   const seen = new Set();
   let lastAt = null;
+  const els = new Map();
+  const upd = m => {
+    const b = els.get(m.id);
+    if (!b) return;
+    b.replaceChildren(m.body);
+    if (m.edited_at) b.append(h("span", { style: "font-size:11px;margin-left:6px;opacity:.7" }, "modifié"));
+    if (m.sender_id === me.id) b.onclick = () => editMsg(m);
+  };
+  const editMsg = m => {
+    if (Date.now() - new Date(m.created_at) > 15 * 60 * 1000) return toast("Tu ne peux plus modifier ce message (15 minutes maximum).");
+    const inp2 = h("input", { class: "inp", value: m.body, maxlength: 4000, "aria-label": "Modifier le message" });
+    const sheet = h("div", { class: "ov", style: "z-index:7;justify-content:flex-end;background:rgba(0,0,0,.6)" },
+      h("div", { class: "pad", style: "background:var(--bar)" },
+        h("div", { style: "font-weight:600" }, "Modifier le message"), inp2,
+        h("div", { style: "display:flex;gap:10px" },
+          h("button", { class: "btn alt", style: "flex:1", onclick: () => sheet.remove() }, "Annuler"),
+          h("button", { class: "btn", style: "flex:1", onclick: async () => {
+            const t = inp2.value.trim();
+            if (!t || t === m.body) return sheet.remove();
+            const { data, error } = await sb.from("messages").update({ body: t }).eq("id", m.id).select().single();
+            if (error) return toast("Modification impossible (15 minutes maximum).");
+            sheet.remove(); upd(data);
+          } }, "Enregistrer"))));
+    $.append(sheet); inp2.focus();
+  };
   const add = m => {
     if (seen.has(m.id)) return;
     seen.add(m.id); lastAt = m.created_at;
@@ -209,7 +236,12 @@ async function chatView(c, title, url) {
     if (/^(📞|📹) Appel/.test(m.body)) {
       list.append(h("div", { class: "b" + (mine ? " me" : ""), style: "display:flex;flex-direction:column;gap:4px" }, m.body,
         h("button", { class: "btn alt", style: "height:34px;padding:0;text-align:left;color:inherit;text-decoration:underline", onclick: () => startCall(c, title, url, m.body.startsWith("📹") ? "video" : "audio") }, "Rappeler")));
-    } else list.append(h("div", { class: "b" + (mine ? " me" : "") }, m.body));
+    } else {
+      const b = h("div", { class: "b" + (mine ? " me" : "") }, m.body);
+      if (m.edited_at) b.append(h("span", { style: "font-size:11px;margin-left:6px;opacity:.7" }, "modifié"));
+      if (mine) { b.style.cursor = "pointer"; b.onclick = () => editMsg(m); }
+      els.set(m.id, b); list.append(b);
+    }
     box.scrollTop = box.scrollHeight;
   };
   const { data: old } = await sb.from("messages").select("*").eq("conversation_id", c.id)
@@ -219,6 +251,7 @@ async function chatView(c, title, url) {
   // Temps réel + vérification toutes les 8 s au cas où la connexion serait instable
   chan = sb.channel("c-" + c.id)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "conversation_id=eq." + c.id }, p => add(p.new))
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: "conversation_id=eq." + c.id }, p => upd(p.new))
     .subscribe();
   poll = setInterval(async () => {
     let q = sb.from("messages").select("*").eq("conversation_id", c.id).order("created_at");
@@ -238,63 +271,117 @@ async function chatView(c, title, url) {
   inp.onkeydown = e => { if (e.key === "Enter") doSend(); };
 }
 
-// ---------- Nouvelle discussion ou nouveau groupe ----------
-function newView() {
+// ---------- Amis, demandes et groupes ----------
+async function newView(mode) {
   stop();
-  const sel = new Map();
+  const grp = mode === "group";
   const q = h("input", { class: "inp", type: "search", "aria-label": "Chercher une personne", placeholder: "Chercher une personne par nom" });
-  const res = h("div");
-  const gname = h("input", { class: "inp", "aria-label": "Nom du groupe", placeholder: "Nom du groupe", maxlength: 60, style: "display:none" });
-  const go = h("button", { class: "btn", style: "flex:1" }, "Démarrer");
-  const upd = () => {
-    gname.style.display = sel.size > 1 ? "block" : "none";
-    go.disabled = !sel.size;
-    go.textContent = sel.size > 1 ? "Créer le groupe (" + sel.size + ")" : "Démarrer";
+  const body = h("div", { class: "body pad" });
+  const sel = new Map();
+  const gname = h("input", { class: "inp", "aria-label": "Nom du groupe", placeholder: "Nom du groupe", maxlength: 60 });
+  const go = h("button", { class: "btn", style: "flex:1" }, "Créer le groupe");
+  go.disabled = true;
+  let results = [];
+
+  const load = async () => {
+    const { data, error } = await sb.from("friendships")
+      .select("id,requester_id,addressee_id,status,req:profiles!requester_id(id,display_name,avatar_url),adr:profiles!addressee_id(id,display_name,avatar_url)")
+      .or("requester_id.eq." + me.id + ",addressee_id.eq." + me.id);
+    if (error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger tes amis. Vérifie ta connexion.")); return null; }
+    return data.map(f => { const sent = f.requester_id === me.id; return { id: f.id, status: f.status, dir: sent ? "sent" : "received", p: sent ? f.adr : f.req }; });
   };
-  upd();
-  const draw = rows => res.replaceChildren(...rows.map(p => {
-    const cb = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:#0F6B4F", checked: sel.has(p.id) });
-    cb.onchange = () => { cb.checked ? sel.set(p.id, p) : sel.delete(p.id); upd(); };
-    return h("label", { class: "row", style: "flex-direction:row;font-weight:400;font-size:16px;cursor:pointer" },
-      cb, av(p.display_name, p.avatar_url), h("div", { class: "grow", style: "min-width:0" }, h("div", {}, p.display_name), p.status && h("div", { class: "mut ell" }, p.status)));
-  }));
+  const rowEl = (p, ...acts) => h("div", { class: "row", style: "padding:10px 0" }, av(p.display_name, p.avatar_url),
+    h("div", { class: "grow ell", style: "font-weight:600" }, p.display_name), ...acts);
+  const sm = (t, fn, alt) => h("button", { class: "btn" + (alt ? " alt" : ""), style: "height:38px;padding:0 12px;font-size:14px", onclick: fn }, t);
+  const act = async (fn, ok) => {
+    const r = await fn();
+    if (r && r.error) toast("Action impossible. Réessaie."); else if (ok) toast(ok);
+    render();
+  };
+  const chatWith = async p => {
+    const { data, error } = await sb.rpc("start_direct_chat", { other: p.id });
+    if (error) return toast("Impossible d’ouvrir la discussion.");
+    chatView({ id: data, is_group: false }, p.display_name, p.avatar_url);
+  };
+  const accept = r => sm("Accepter", () => act(() => sb.from("friendships").update({ status: "accepted" }).eq("id", r.id), "Ami ajouté."));
+  const label = t => h("div", { class: "mut", style: "margin-top:6px" }, t);
+
+  const render = async () => {
+    const rel = await load();
+    if (!rel) return;
+    const by = new Map(rel.map(r => [r.p.id, r]));
+    const friends = rel.filter(r => r.status === "accepted");
+    const els = [];
+    if (grp) {
+      els.push(gname);
+      if (!friends.length) els.push(h("p", { class: "mut" }, "Ajoute d’abord des amis pour créer un groupe."));
+      friends.forEach(r => {
+        const cb = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:#0F6B4F", checked: sel.has(r.p.id) });
+        cb.onchange = () => { cb.checked ? sel.set(r.p.id, r.p) : sel.delete(r.p.id); go.textContent = "Créer le groupe (" + sel.size + ")"; go.disabled = !sel.size; };
+        els.push(h("label", { class: "row", style: "flex-direction:row;font-weight:400;font-size:16px;cursor:pointer;padding:10px 0" }, cb, av(r.p.display_name, r.p.avatar_url), r.p.display_name));
+      });
+    } else {
+      if (results.length) {
+        els.push(label("Résultats"));
+        results.forEach(p => {
+          const r = by.get(p.id);
+          els.push(rowEl(p, !r
+            ? sm("Ajouter", () => act(() => sb.from("friendships").insert({ requester_id: me.id, addressee_id: p.id }), "Demande envoyée."))
+            : r.status === "accepted" ? sm("Écrire", () => chatWith(p))
+            : r.dir === "sent" ? h("span", { class: "mut" }, "Demande envoyée") : accept(r)));
+        });
+      }
+      const recv = rel.filter(r => r.status === "pending" && r.dir === "received");
+      if (recv.length) {
+        els.push(label("Demandes reçues"));
+        recv.forEach(r => els.push(rowEl(r.p, accept(r), sm("Refuser", () => act(() => sb.from("friendships").delete().eq("id", r.id)), true))));
+      }
+      els.push(label("Mes amis" + (friends.length ? " (" + friends.length + ")" : "")));
+      if (!friends.length) els.push(h("p", { class: "mut" }, "Pas encore d’amis. Cherche une personne par son nom et envoie-lui une demande : vous pourrez discuter dès qu’elle l’aura acceptée."));
+      friends.forEach(r => els.push(rowEl(r.p, sm("Écrire", () => chatWith(r.p)),
+        sm("Retirer", () => { if (confirm("Retirer " + r.p.display_name + " de tes amis ?")) act(() => sb.from("friendships").delete().eq("id", r.id)); }, true))));
+      const sent = rel.filter(r => r.status === "pending" && r.dir === "sent");
+      if (sent.length) {
+        els.push(label("Demandes envoyées"));
+        sent.forEach(r => els.push(rowEl(r.p, sm("Annuler", () => act(() => sb.from("friendships").delete().eq("id", r.id)), true))));
+      }
+    }
+    body.replaceChildren(...els);
+  };
+
   let tm;
   q.oninput = () => {
     clearTimeout(tm);
     tm = setTimeout(async () => {
-      const s = q.value.trim().replace(/[%,()]/g, "");
-      if (s.length < 2) { res.replaceChildren(); return; }
-      const { data } = await sb.from("profiles").select("id,display_name,status,avatar_url")
-        .ilike("display_name", "%" + s + "%").neq("id", me.id).limit(20);
-      draw(data || []);
+      const t = q.value.trim().replace(/[%,()]/g, "");
+      if (t.length < 2) results = [];
+      else {
+        const { data } = await sb.from("profiles").select("id,display_name,avatar_url").ilike("display_name", "%" + t + "%").neq("id", me.id).limit(20);
+        results = data || [];
+      }
+      render();
     }, 300);
   };
   go.onclick = async () => {
+    const name = gname.value.trim(), ids = [...sel.keys()];
+    if (!name) return toast("Donne un nom au groupe.");
     go.disabled = true;
-    const ids = [...sel.keys()];
-    let c, title, url;
-    if (ids.length === 1) {
-      const { data, error } = await sb.rpc("start_direct_chat", { other: ids[0] });
-      if (error) { toast("Impossible de démarrer la discussion."); go.disabled = false; return; }
-      c = { id: data, is_group: false }; title = sel.get(ids[0]).display_name; url = sel.get(ids[0]).avatar_url;
-    } else {
-      const name = gname.value.trim();
-      if (!name) { toast("Donne un nom au groupe."); go.disabled = false; return; }
-      const r = await sb.from("conversations").insert({ is_group: true, name, created_by: me.id }).select().single();
-      if (r.error) { toast("Impossible de créer le groupe."); go.disabled = false; return; }
-      const m = await sb.from("conversation_members").insert([me.id, ...ids].map(u => ({ conversation_id: r.data.id, user_id: u })));
-      if (m.error) toast("Le groupe a été créé, mais sans tous les membres.");
-      c = r.data; title = name;
-    }
-    chatView(c, title, url);
+    const r = await sb.from("conversations").insert({ is_group: true, name, created_by: me.id }).select().single();
+    if (r.error) { toast("Impossible de créer le groupe."); go.disabled = false; return; }
+    const m = await sb.from("conversation_members").insert([me.id, ...ids].map(u => ({ conversation_id: r.data.id, user_id: u })));
+    if (m.error) toast("Le groupe a été créé, mais sans tous les membres.");
+    chatView(r.data, name, null);
   };
-  show(h("div", { class: "top" },
+
+  show(...[
+    h("div", { class: "top" },
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: listView }, "←"),
-      h("div", { style: "font-weight:600;font-size:18px" }, "Nouvelle discussion")),
-    h("div", { class: "body pad" },
-      h("p", { class: "mut", style: "margin:0" }, "Choisis une personne pour écrire, ou plusieurs pour créer un groupe."),
-      q, res, gname),
-    h("div", { class: "bar" }, go));
+      h("div", { style: "font-weight:600;font-size:18px;flex:1" }, grp ? "Nouveau groupe" : "Amis"),
+      grp ? null : h("button", { class: "btn alt", style: "padding:0 10px", onclick: () => newView("group") }, "Nouveau groupe")),
+    grp ? null : h("div", { class: "pad", style: "padding-bottom:0" }, q),
+    body,
+    grp ? h("div", { class: "bar" }, go) : null].filter(Boolean));
+  render();
 }
 
 // ---------- Appels audio et vidéo (à deux) ----------
