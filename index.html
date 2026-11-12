@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta name="app-version" content="2026-11-12a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -90,7 +91,8 @@ function h(t, a, ...k) {
   return e;
 }
 const show = (...n) => $.replaceChildren(...n);
-const stop = () => { if (chan) { sb.removeChannel(chan); chan = null; } clearInterval(poll); };
+let chatPend = null;
+const stop = () => { if (chan) { sb.removeChannel(chan); chan = null; } clearInterval(poll); chatPend = null; };
 const ini = s => (s || "?").trim().charAt(0).toUpperCase();
 const av = (n, u, z) => h("div", { class: "av", style: z ? "width:" + z + "px;height:" + z + "px" + (z > 60 ? ";font-size:36px" : "") : null }, u ? h("img", { src: u, alt: "" }) : ini(n));
 const fmt = d => {
@@ -100,6 +102,78 @@ const fmt = d => {
     : t.toLocaleDateString("fr", { day: "numeric", month: "short" });
 };
 const toast = t => { const e = h("div", { class: "toast", role: "status" }, t); $.append(e); setTimeout(() => e.remove(), 3500); };
+
+// ---------- Mode hors ligne, messages en attente et mises à jour ----------
+const LS = {
+  get(k) { try { return JSON.parse(localStorage.getItem("bk:" + k)); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem("bk:" + k, JSON.stringify(v)); } catch (e) {} },
+  clear() { try { Object.keys(localStorage).filter(x => x.startsWith("bk:")).forEach(x => localStorage.removeItem(x)); } catch (e) {} }
+};
+const withTimeout = (p, ms) => Promise.race([p, new Promise(r => setTimeout(() => r({ data: null, error: { message: "timeout" } }), ms))]);
+const netErr = e => !navigator.onLine || /fetch|network|timeout|abort|offline|load failed/i.test((e && e.message) || "");
+const outbox = () => LS.get("out") || [];
+let flushing = false;
+async function flushOutbox() {
+  if (flushing || !me || !navigator.onLine) return;
+  flushing = true;
+  try {
+    for (const it of outbox()) {
+      const { data, error } = await sb.from("messages").insert({ id: it.id, conversation_id: it.conversation_id, sender_id: me.id, body: it.body }).select().single();
+      const dup = error && /duplicate|23505/i.test((error.message || "") + (error.code || ""));
+      if (error && !dup) {
+        if (netErr(error)) break;
+        LS.set("out", outbox().filter(x => x.id !== it.id));
+        if (chatPend) chatPend.done(it.id, null);
+        toast("Un message n’a pas pu être envoyé (refusé).");
+        continue;
+      }
+      LS.set("out", outbox().filter(x => x.id !== it.id));
+      if (chatPend) chatPend.done(it.id, data || null);
+    }
+  } finally { flushing = false; }
+}
+
+// Bandeau « Hors ligne »
+const netBar = h("div", { role: "status", style: "position:fixed;left:0;right:0;top:0;z-index:55;background:#7A4A00;color:#fff;text-align:center;padding:calc(6px + env(safe-area-inset-top)) 10px 6px;font-size:13px;display:none" },
+  "Hors ligne : tes messages partiront au retour du réseau.");
+document.body.append(netBar);
+const setNet = () => { netBar.style.display = navigator.onLine ? "none" : "block"; };
+window.addEventListener("offline", setNet);
+window.addEventListener("online", () => { setNet(); flushOutbox(); checkUpdate(); });
+setNet();
+
+// Avis « nouvelle version disponible »
+const APP_VERSION = (document.querySelector('meta[name="app-version"]') || {}).content;
+function showUpdate() {
+  if (document.getElementById("upd")) return;
+  const b = h("div", { id: "upd", role: "status", style: "position:fixed;left:0;right:0;top:0;z-index:60;background:#F2A900;color:#1F1A14;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;display:flex;gap:10px;align-items:center;font-size:14px" },
+    h("div", { style: "flex:1;font-weight:600" }, "Une nouvelle version de Bomoko est disponible."),
+    h("button", { class: "btn", style: "height:38px;padding:0 12px;font-size:14px", onclick: applyUpdate }, "Mettre à jour"),
+    h("button", { "aria-label": "Plus tard", style: "border:0;background:none;font-size:20px;color:inherit", onclick: () => b.remove() }, "✕"));
+  document.body.append(b);
+}
+async function applyUpdate() {
+  try {
+    const ks = await caches.keys();
+    await Promise.all(ks.map(k => caches.delete(k)));
+    const rs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(rs.map(r => r.unregister()));
+  } catch (e) {}
+  location.reload();
+}
+async function checkUpdate() {
+  if (!navigator.onLine || !APP_VERSION) return;
+  try {
+    const r = await fetch(location.pathname + "?_=" + Date.now(), { cache: "no-store", headers: { Range: "bytes=0-1500" } });
+    const m = (await r.text()).match(/name="app-version" content="([^"]+)"/);
+    if (m && m[1] !== APP_VERSION) showUpdate();
+  } catch (e) {}
+}
+setTimeout(checkUpdate, 5000);
+setInterval(checkUpdate, 10 * 60 * 1000);
+setInterval(() => { if (navigator.onLine && outbox().length) flushOutbox(); }, 20000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkUpdate(); flushOutbox(); } });
+
 const fr = m =>
   /Invalid login/i.test(m) ? "E-mail ou mot de passe incorrect." :
   /already registered/i.test(m) ? "Cet e-mail a déjà un compte." :
@@ -144,6 +218,8 @@ function authView(signup = false) {
 async function start() {
   const { data } = await sb.from("profiles").select("display_name,status,avatar_url").eq("id", me.id).single();
   profile = data || { display_name: "" };
+  if (data) { LS.set("user", { id: me.id }); LS.set("profile", profile); }
+  flushOutbox();
   listenCalls();
   listView();
   const addId = new URLSearchParams(location.search).get("add");
@@ -158,9 +234,17 @@ async function listView() {
     h("button", { class: "fab", "aria-label": "Nouvelle discussion", onclick: newView }, "+"), tabs("l"));
   sb.from("friendships").select("id", { count: "exact", head: true }).eq("addressee_id", me.id).eq("status", "pending")
     .then(r => { const b = document.getElementById("fb"); if (b && r.count) b.textContent = "Amis (" + r.count + ")"; });
-  const { data: mine, error } = await sb.from("conversation_members")
-    .select("conversation_id,conversations(id,is_group,name,created_at)").eq("user_id", me.id);
-  if (error) { body.replaceChildren(h("p", { class: "err pad" }, "Impossible de charger tes discussions. Vérifie ta connexion.")); return; }
+  const drawList = items => body.replaceChildren(...items.map(i => h("button", { class: "row", onclick: () => chatView(i.c, i.title, i.url) },
+    av(i.title, i.url),
+    h("div", { class: "grow" },
+      h("div", { class: "ell", style: "font-weight:600" }, i.title),
+      h("div", { class: "mut ell" }, i.l ? i.l.body : "Aucun message")),
+    h("div", { class: "mut", style: "font-size:12px" }, i.l ? fmt(i.l.created_at) : ""))));
+  const cachedList = LS.get("list:" + me.id);
+  if (cachedList && cachedList.length) drawList(cachedList);
+  const { data: mine, error } = await withTimeout(sb.from("conversation_members")
+    .select("conversation_id,conversations(id,is_group,name,created_at)").eq("user_id", me.id), 10000);
+  if (error) { if (!(cachedList && cachedList.length)) body.replaceChildren(h("p", { class: "err pad" }, "Impossible de charger tes discussions. Vérifie ta connexion.")); return; }
   if (!mine.length) { body.replaceChildren(h("p", { class: "mut pad" }, "Aucune discussion pour le moment. Appuie sur + pour ajouter des amis et commencer à discuter.")); return; }
   const ids = mine.map(m => m.conversation_id);
   const [mem, last] = await Promise.all([
@@ -175,12 +259,8 @@ async function listView() {
     return { c, l: lastBy[c.id], url: c.is_group ? null : other?.profiles?.avatar_url, title: c.is_group ? (c.name || "Groupe") : (other?.profiles?.display_name || "Discussion") };
   });
   items.sort((a, b) => new Date(b.l?.created_at || b.c.created_at) - new Date(a.l?.created_at || a.c.created_at));
-  body.replaceChildren(...items.map(i => h("button", { class: "row", onclick: () => chatView(i.c, i.title, i.url) },
-    av(i.title, i.url),
-    h("div", { class: "grow" },
-      h("div", { class: "ell", style: "font-weight:600" }, i.title),
-      h("div", { class: "mut ell" }, i.l ? i.l.body : "Aucun message")),
-    h("div", { class: "mut", style: "font-size:12px" }, i.l ? fmt(i.l.created_at) : ""))));
+  LS.set("list:" + me.id, items);
+  drawList(items);
 }
 
 // ---------- Conversation ----------
@@ -201,14 +281,24 @@ async function chatView(c, title, url) {
       h("button", { class: "btn alt", "aria-label": "Joindre un fichier ou un contact", style: "padding:0 8px;font-size:22px", onclick: () => attachMenu(c, add) }, "📎"), inp, send));
 
   const names = {};
-  const { data: mem } = await sb.from("conversation_members").select("user_id,profiles(display_name,status)").eq("conversation_id", c.id);
+  const { data: mem } = await withTimeout(sb.from("conversation_members").select("user_id,profiles(display_name,status)").eq("conversation_id", c.id), 6000);
   for (const m of mem || []) names[m.user_id] = m.profiles?.display_name || "";
   if (!c.is_group) sub.textContent = (mem || []).find(m => m.user_id !== me.id)?.profiles?.status || "";
 
   const seen = new Set();
   let lastAt = null;
   const els = new Map();
+  const ckey = "msgs:" + c.id, hist = [], pend = new Map();
+  let loaded = false;
+  const showPending = it => {
+    if (pend.has(it.id) || seen.has(it.id)) return;
+    const b = h("div", { class: "b me", style: "opacity:.6" }, it.body, h("span", { style: "font-size:11px;margin-left:6px" }, "⏳ en attente"));
+    pend.set(it.id, b); list.append(b); box.scrollTop = box.scrollHeight;
+  };
+  const donePending = (id, row) => { const b = pend.get(id); if (b) { b.remove(); pend.delete(id); } if (row) add(row); };
   const upd = m => {
+    const hi = hist.findIndex(x => x.id === m.id);
+    if (hi >= 0) { hist[hi] = m; LS.set(ckey, hist); }
     const b = els.get(m.id);
     if (!b) return;
     b.replaceChildren(m.body);
@@ -233,8 +323,11 @@ async function chatView(c, title, url) {
     $.append(sheet); inp2.focus();
   };
   const add = m => {
+    const pb = pend.get(m.id);
+    if (pb) { pb.remove(); pend.delete(m.id); }
     if (seen.has(m.id)) return;
     seen.add(m.id); lastAt = m.created_at;
+    hist.push(m); if (hist.length > 60) hist.shift(); if (loaded) LS.set(ckey, hist);
     const mine = m.sender_id === me.id;
     if (c.is_group && !mine) list.append(h("div", { class: "who" }, names[m.sender_id] || "Membre"));
     if (m.media_path || m.shared_user_id) { list.append(rich(m, mine)); } else if (/^(📞|📹) Appel/.test(m.body)) {
@@ -248,9 +341,13 @@ async function chatView(c, title, url) {
     }
     box.scrollTop = box.scrollHeight;
   };
-  const { data: old } = await sb.from("messages").select("*").eq("conversation_id", c.id)
-    .order("created_at", { ascending: false }).limit(60);
-  (old || []).reverse().forEach(add);
+  (LS.get(ckey) || []).forEach(add);   // affichage immédiat depuis le téléphone
+  const { data: old, error: oldErr } = await withTimeout(sb.from("messages").select("*").eq("conversation_id", c.id)
+    .order("created_at", { ascending: false }).limit(60), 10000);
+  if (!oldErr && old) { list.replaceChildren(); seen.clear(); els.clear(); hist.length = 0; pend.clear(); lastAt = null; old.slice().reverse().forEach(add); }
+  loaded = true; LS.set(ckey, hist);
+  chatPend = { cid: c.id, show: showPending, done: donePending };
+  outbox().filter(x => x.conversation_id === c.id).forEach(showPending);
 
   // Temps réel + vérification toutes les 8 s au cas où la connexion serait instable
   chan = sb.channel("c-" + c.id)
@@ -268,8 +365,19 @@ async function chatView(c, title, url) {
     const t = inp.value.trim();
     if (!t) return;
     inp.value = "";
-    const { data, error } = await sb.from("messages").insert({ conversation_id: c.id, sender_id: me.id, body: t }).select().single();
-    if (error) { inp.value = t; toast("Message non envoyé. Réessaie."); } else add(data);
+    const id = crypto.randomUUID();
+    let res = { error: { message: "offline" } };
+    if (navigator.onLine) {
+      const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 12000);
+      res = await sb.from("messages").insert({ id, conversation_id: c.id, sender_id: me.id, body: t }).abortSignal(ac.signal).select().single();
+      clearTimeout(tm);
+    }
+    if (!res.error) return add(res.data);
+    if (netErr(res.error)) {
+      LS.set("out", [...outbox(), { id, conversation_id: c.id, body: t, created_at: new Date().toISOString() }]);
+      showPending({ id, body: t });
+      toast("Hors ligne : le message partira au retour du réseau.");
+    } else { inp.value = t; toast("Message non envoyé. Réessaie."); }
   };
   send.onclick = doSend;
   inp.onkeydown = e => { if (e.key === "Enter") doSend(); };
@@ -996,7 +1104,7 @@ function profView() {
       } }, "Enregistrer"),
       msg,
       h("button", { class: "btn alt", onclick: showMyQr }, "Mon code QR"),
-      h("button", { class: "btn alt", onclick: () => sb.auth.signOut() }, "Se déconnecter")),
+      h("button", { class: "btn alt", onclick: () => { LS.clear(); sb.auth.signOut(); } }, "Se déconnecter")),
     tabs("p"));
 }
 
@@ -1005,8 +1113,17 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catc
 
 // ---------- Démarrage ----------
 sb.auth.onAuthStateChange((ev, s) => {
-  if (!s) { stopCalls(); me = null; profile = null; authView(); return; }
-  if (!me) { me = s.user; setTimeout(start, 0); }
+  if (!s) {
+    stopCalls();
+    const u = LS.get("user");
+    // Sans réseau, on ouvre l'app avec ce qui est gardé sur le téléphone
+    if (!navigator.onLine && u && ev !== "SIGNED_OUT") {
+      if (!me) { me = { id: u.id, offline: true }; profile = LS.get("profile") || { display_name: "" }; listView(); }
+      return;
+    }
+    me = null; profile = null; authView(); return;
+  }
+  if (!me || me.offline) { me = s.user; setTimeout(start, 0); }
 });
 </script>
 </body>
