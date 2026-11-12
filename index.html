@@ -64,6 +64,7 @@ textarea{font:inherit}
 <body>
 <div id="app"></div>
 <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.22.2.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script>
 const $ = document.getElementById("app");
@@ -145,6 +146,8 @@ async function start() {
   profile = data || { display_name: "" };
   listenCalls();
   listView();
+  const addId = new URLSearchParams(location.search).get("add");
+  if (addId && UUID_RE.test(addId)) { history.replaceState(null, "", location.pathname); setTimeout(() => friendSheet(addId), 300); }
 }
 
 // ---------- Liste des discussions ----------
@@ -194,7 +197,8 @@ async function chatView(c, title, url) {
       av(title, url, 40),
       h("div", { style: "min-width:0;flex:1" }, h("div", { class: "ell", style: "font-weight:600" }, title), sub),
       callBtn("audio"), callBtn("video")),
-    box, h("div", { class: "bar" }, inp, send));
+    box, h("div", { class: "bar" },
+      h("button", { class: "btn alt", "aria-label": "Joindre un fichier ou un contact", style: "padding:0 8px;font-size:22px", onclick: () => attachMenu(c, add) }, "📎"), inp, send));
 
   const names = {};
   const { data: mem } = await sb.from("conversation_members").select("user_id,profiles(display_name,status)").eq("conversation_id", c.id);
@@ -233,7 +237,7 @@ async function chatView(c, title, url) {
     seen.add(m.id); lastAt = m.created_at;
     const mine = m.sender_id === me.id;
     if (c.is_group && !mine) list.append(h("div", { class: "who" }, names[m.sender_id] || "Membre"));
-    if (/^(📞|📹) Appel/.test(m.body)) {
+    if (m.media_path || m.shared_user_id) { list.append(rich(m, mine)); } else if (/^(📞|📹) Appel/.test(m.body)) {
       list.append(h("div", { class: "b" + (mine ? " me" : ""), style: "display:flex;flex-direction:column;gap:4px" }, m.body,
         h("button", { class: "btn alt", style: "height:34px;padding:0;text-align:left;color:inherit;text-decoration:underline", onclick: () => startCall(c, title, url, m.body.startsWith("📹") ? "video" : "audio") }, "Rappeler")));
     } else {
@@ -337,7 +341,7 @@ async function newView(mode) {
         recv.forEach(r => els.push(rowEl(r.p, accept(r), sm("Refuser", () => act(() => sb.from("friendships").delete().eq("id", r.id)), true))));
       }
       els.push(label("Mes amis" + (friends.length ? " (" + friends.length + ")" : "")));
-      if (!friends.length) els.push(h("p", { class: "mut" }, "Pas encore d’amis. Cherche une personne par son nom et envoie-lui une demande : vous pourrez discuter dès qu’elle l’aura acceptée."));
+      if (!friends.length) els.push(h("p", { class: "mut" }, "Pas encore d’amis. Cherche une personne par son nom, ou scanne son code QR : vous pourrez discuter dès qu’elle aura accepté ta demande."));
       friends.forEach(r => els.push(rowEl(r.p, sm("Écrire", () => chatWith(r.p)),
         sm("Retirer", () => { if (confirm("Retirer " + r.p.display_name + " de tes amis ?")) act(() => sb.from("friendships").delete().eq("id", r.id)); }, true))));
       const sent = rel.filter(r => r.status === "pending" && r.dir === "sent");
@@ -377,7 +381,8 @@ async function newView(mode) {
     h("div", { class: "top" },
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: listView }, "←"),
       h("div", { style: "font-weight:600;font-size:18px;flex:1" }, grp ? "Nouveau groupe" : "Amis"),
-      grp ? null : h("button", { class: "btn alt", style: "padding:0 10px", onclick: () => newView("group") }, "Nouveau groupe")),
+      grp ? null : h("button", { class: "btn alt", style: "padding:0 8px", onclick: scanQr }, "Scanner"),
+      grp ? null : h("button", { class: "btn alt", style: "padding:0 8px", onclick: () => newView("group") }, "Groupe")),
     grp ? null : h("div", { class: "pad", style: "padding-bottom:0" }, q),
     body,
     grp ? h("div", { class: "bar" }, go) : null].filter(Boolean));
@@ -578,6 +583,152 @@ function listenCalls() {
   check();
 }
 function stopCalls() { if (callChan) { sb.removeChannel(callChan); callChan = null; } clearInterval(callPoll); }
+
+// ---------- Fichiers, contacts partagés et codes QR ----------
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const sheetEl = (...kids) => {
+  const sh = h("div", { class: "ov", style: "z-index:7;justify-content:flex-end;background:rgba(0,0,0,.6)", onclick: e => { if (e.target === sh) sh.remove(); } },
+    h("div", { class: "pad", style: "background:var(--bar);max-height:75%;overflow-y:auto;gap:8px" }, ...kids));
+  $.append(sh);
+  return sh;
+};
+
+// Affiche un message qui contient un fichier ou un contact
+function rich(m, mine) {
+  const b = h("div", { class: "b" + (mine ? " me" : ""), style: "display:flex;flex-direction:column;gap:6px;max-width:80%" });
+  if (m.shared_user_id) {
+    const nm = (m.body || "").replace(/^👤 Contact : /, "");
+    const head = h("div", { style: "display:flex;align-items:center;gap:10px" }, av(nm, null, 40), h("div", { style: "font-weight:600" }, nm));
+    b.append(head, h("button", { class: "btn alt", style: "height:34px;padding:0;text-align:left;color:inherit;text-decoration:underline", onclick: () => friendSheet(m.shared_user_id) }, "Voir le profil"));
+    sb.from("profiles").select("avatar_url").eq("id", m.shared_user_id).maybeSingle().then(r => { if (r.data && r.data.avatar_url) head.firstChild.replaceWith(av(nm, r.data.avatar_url, 40)); });
+    return b;
+  }
+  const t = m.media_type || "";
+  const ph = h("div", { style: "opacity:.7" }, "Chargement…");
+  b.append(ph);
+  sb.storage.from("chat-files").createSignedUrl(m.media_path, 3600).then(({ data }) => {
+    ph.remove();
+    if (!data) return b.prepend(h("div", {}, "Fichier indisponible"));
+    const u = data.signedUrl;
+    let el;
+    if (t.startsWith("image/")) el = h("img", { src: u, alt: m.media_name || "Photo", style: "max-width:100%;border-radius:10px" });
+    else if (t.startsWith("video/")) el = h("video", { src: u, controls: true, playsinline: true, preload: "metadata", style: "max-width:100%;border-radius:10px" });
+    else if (t.startsWith("audio/")) el = h("audio", { src: u, controls: true, preload: "metadata", style: "max-width:100%" });
+    else el = h("a", { href: u, target: "_blank", rel: "noopener", style: "color:inherit" }, "📄 " + (m.media_name || "Fichier") + (m.media_size ? " (" + Math.round(m.media_size / 1024) + " Ko)" : ""));
+    b.prepend(el);
+  });
+  if (!/^(📷|🎥|🎵|📄) /.test(m.body)) b.append(h("div", {}, m.body));
+  return b;
+}
+
+// Menu « joindre » : photo/vidéo, audio, document, contact
+function attachMenu(c, add) {
+  const fi = h("input", { type: "file", style: "display:none" });
+  const choose = accept => { fi.accept = accept; fi.click(); };
+  const opt = (t, fn) => h("button", { class: "btn alt", style: "text-align:left;font-size:17px", onclick: fn }, t);
+  const sh = sheetEl(fi, opt("🖼️ Photo ou vidéo", () => choose("image/*,video/*")), opt("🎵 Audio", () => choose("audio/*")),
+    opt("📄 Document", () => choose(".pdf,.doc,.docx,.xls,.xlsx,.txt")), opt("👤 Contact", () => { sh.remove(); shareContact(c, add); }));
+  fi.onchange = async () => {
+    const f = fi.files[0];
+    if (!f) return;
+    if (f.size > 25 * 1024 * 1024) return toast("Fichier trop lourd (25 Mo maximum).");
+    sh.remove(); toast("Envoi en cours…");
+    let blob = f, type = f.type || "application/octet-stream";
+    try {
+      if (type.startsWith("image/") && type !== "image/gif") { blob = await fit(f, 1600); type = "image/jpeg"; }
+      const safe = f.name.replace(/[^\w.\-]+/g, "_").slice(-60);
+      const path = c.id + "/" + crypto.randomUUID() + "-" + safe;
+      const up = await sb.storage.from("chat-files").upload(path, blob, { contentType: type });
+      if (up.error) throw up.error;
+      const label = type.startsWith("image/") ? "📷 Photo" : type.startsWith("video/") ? "🎥 Vidéo" : type.startsWith("audio/") ? "🎵 Audio" : "📄 " + f.name;
+      const { data, error } = await sb.from("messages").insert({ conversation_id: c.id, sender_id: me.id, body: label.slice(0, 200), media_path: path, media_type: type, media_name: f.name, media_size: f.size }).select().single();
+      if (error) throw error;
+      add(data);
+    } catch (e) { toast("Envoi impossible. Réessaie."); }
+  };
+}
+
+// Partager un de ses amis dans la discussion
+async function shareContact(c, add) {
+  const { data } = await sb.from("friendships")
+    .select("requester_id,addressee_id,req:profiles!requester_id(id,display_name,avatar_url),adr:profiles!addressee_id(id,display_name,avatar_url)")
+    .eq("status", "accepted").or("requester_id.eq." + me.id + ",addressee_id.eq." + me.id);
+  const people = (data || []).map(f => f.requester_id === me.id ? f.adr : f.req).filter(Boolean);
+  const sh = sheetEl(h("div", { style: "font-weight:600" }, "Partager un contact"),
+    ...(people.length ? people.map(p => h("button", { class: "row", style: "padding:8px 0", onclick: async () => {
+      sh.remove();
+      const { data: m, error } = await sb.from("messages").insert({ conversation_id: c.id, sender_id: me.id, body: "👤 Contact : " + p.display_name, shared_user_id: p.id }).select().single();
+      if (error) toast("Partage impossible."); else add(m);
+    } }, av(p.display_name, p.avatar_url), p.display_name)) : [h("p", { class: "mut" }, "Tu n’as pas encore d’amis à partager.")]));
+}
+
+// Fiche d'une personne : demander en ami, accepter ou écrire
+async function friendSheet(uid) {
+  if (uid === me.id) return toast("C’est ton propre profil.");
+  const [pr, fr] = await Promise.all([
+    sb.from("profiles").select("id,display_name,avatar_url,status").eq("id", uid).maybeSingle(),
+    sb.from("friendships").select("id,requester_id,addressee_id,status")
+      .or("and(requester_id.eq." + me.id + ",addressee_id.eq." + uid + "),and(requester_id.eq." + uid + ",addressee_id.eq." + me.id + ")").maybeSingle()]);
+  const p = pr.data, rel = fr.data;
+  if (!p) return toast("Profil introuvable.");
+  let act;
+  if (!rel) act = h("button", { class: "btn", onclick: async () => {
+    const { error } = await sb.from("friendships").insert({ requester_id: me.id, addressee_id: uid });
+    sh.remove(); toast(error ? "Demande impossible." : "Demande envoyée.");
+  } }, "Envoyer une demande d’ami");
+  else if (rel.status === "accepted") act = h("button", { class: "btn", onclick: async () => {
+    const { data, error } = await sb.rpc("start_direct_chat", { other: uid });
+    if (error) return toast("Impossible d’ouvrir la discussion.");
+    sh.remove(); chatView({ id: data, is_group: false }, p.display_name, p.avatar_url);
+  } }, "Écrire");
+  else if (rel.requester_id === me.id) act = h("div", { class: "mut", style: "text-align:center" }, "Demande déjà envoyée");
+  else act = h("button", { class: "btn", onclick: async () => {
+    const { error } = await sb.from("friendships").update({ status: "accepted" }).eq("id", rel.id);
+    sh.remove(); toast(error ? "Action impossible." : "Ami ajouté.");
+  } }, "Accepter la demande");
+  const sh = sheetEl(h("div", { style: "display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center" },
+    av(p.display_name, p.avatar_url, 96), h("div", { style: "font-size:20px;font-weight:600" }, p.display_name),
+    p.status && h("div", { class: "mut" }, p.status)), act);
+}
+
+// Mon code QR
+function showMyQr() {
+  const link = location.origin + location.pathname + "?add=" + me.id;
+  const box = h("div", { style: "background:#fff;padding:12px;border-radius:14px;align-self:center;line-height:0" });
+  try {
+    const qr = qrcode(0, "M"); qr.addData(link); qr.make();
+    box.innerHTML = qr.createSvgTag(6, 0);
+  } catch (e) { box.style.lineHeight = "1.4"; box.style.color = "#111"; box.textContent = "Code indisponible. Partage ce lien : " + link; }
+  const sh = sheetEl(h("div", { style: "font-weight:600;text-align:center" }, (profile && profile.display_name) || "Mon code"),
+    box, h("p", { class: "mut", style: "text-align:center;margin:0" }, "Fais scanner ce code : la personne pourra t’envoyer une demande d’ami."),
+    h("button", { class: "btn alt", onclick: async () => { try { await navigator.clipboard.writeText(link); toast("Lien copié."); } catch (e) { toast("Copie impossible."); } } }, "Copier mon lien"),
+    h("button", { class: "btn", onclick: () => sh.remove() }, "Fermer"));
+}
+
+// Scanner le code QR d'une personne
+async function scanQr() {
+  if (!("BarcodeDetector" in window) || !navigator.mediaDevices) return toast("Scanner indisponible sur ce téléphone. Scanne le code avec l’appareil photo du téléphone.");
+  let stream, timer;
+  const video = h("video", { playsinline: true, muted: true, autoplay: true, style: "position:absolute;inset:0;width:100%;height:100%;object-fit:cover" });
+  const close = () => { clearInterval(timer); if (stream) stream.getTracks().forEach(t => t.stop()); ov.remove(); };
+  const ov = h("div", { class: "ov", style: "z-index:8;background:#000" }, video,
+    h("div", { style: "position:absolute;left:0;right:0;top:calc(24px + env(safe-area-inset-top));text-align:center;text-shadow:0 1px 6px #000;padding:0 16px" }, "Place le code QR d’une personne dans l’image"),
+    h("button", { class: "btn", style: "position:absolute;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom))", onclick: close }, "Fermer"));
+  $.append(ov);
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = stream; await video.play();
+    const det = new BarcodeDetector({ formats: ["qr_code"] });
+    timer = setInterval(async () => {
+      try {
+        const codes = await det.detect(video);
+        if (!codes.length) return;
+        const id = new URL(codes[0].rawValue).searchParams.get("add");
+        if (id && UUID_RE.test(id)) { close(); friendSheet(id); }
+      } catch (e) {}
+    }, 400);
+  } catch (e) { close(); toast("Caméra indisponible. Vérifie l’autorisation."); }
+}
 
 // ---------- Statuts (24 h) ----------
 const COLORS = ["#0F6B4F", "#8E3B46", "#3B5BA5", "#7A4EAB", "#2F2F2C"];
@@ -844,6 +995,7 @@ function profView() {
         else { profile.display_name = v; profile.status = st.value.trim(); msg.textContent = "Profil enregistré."; }
       } }, "Enregistrer"),
       msg,
+      h("button", { class: "btn alt", onclick: showMyQr }, "Mon code QR"),
       h("button", { class: "btn alt", onclick: () => sb.auth.signOut() }, "Se déconnecter")),
     tabs("p"));
 }
