@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-12a">
+<meta name="app-version" content="2026-11-12b">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -57,8 +57,20 @@ label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600}
 .txt{font-size:26px;font-weight:600;text-align:center;overflow-wrap:anywhere;color:#fff;white-space:pre-wrap}
 .cap{margin-top:12px;text-align:center}
 .nav{position:absolute;top:0;bottom:0;width:50%;border:0;background:none}
-.toast{z-index:9}
+.toast{z-index:9;color:var(--bg)}
 textarea{font:inherit}
+:root[data-theme="minuit"]{--bg:#05070F;--bar:#0D1220;--line:#1F2740;--bub:#18203A;--in:#4A5578;--g:#2F5BD3;--gl:#8FB0FF;--ink:#EAF0FF;--mut:#9AA6C4}
+:root[data-theme="foret"]{--bg:#030A06;--bar:#0B1812;--line:#1B3023;--bub:#14261C;--in:#46634F;--g:#0F6B4F;--gl:#5FE0B0;--ink:#EDF7F0;--mut:#9DB3A5}
+:root[data-theme="prune"]{--bg:#0A050E;--bar:#160D1C;--line:#2E1D3A;--bub:#241631;--in:#6A4E80;--g:#7A3FB0;--gl:#D3A5FF;--ink:#F5EDFB;--mut:#B3A2C2}
+:root[data-theme="clair"]{--bg:#FBF7F0;--bar:#FFFFFF;--line:#DDD3C3;--bub:#EFE7D8;--in:#8A7F70;--g:#0F6B4F;--gl:#0B6B4C;--ink:#1F1A14;--mut:#6B6258;color-scheme:light}
+:root[data-theme="clair"] .ov{color:#F2EFE8}
+:root[data-theme="clair"] .ov .mut{color:#B8B0A4}
+:root[data-theme="clair"] .ov .pad{color:var(--ink)}
+:root[data-theme="clair"] .ov .pad .mut{color:var(--mut)}
+:root[data-bg="points"] .body[data-chat]{background-image:radial-gradient(rgba(127,127,127,.18) 1.2px,transparent 1.4px);background-size:18px 18px}
+:root[data-bg="vagues"] .body[data-chat]{background-image:repeating-linear-gradient(135deg,rgba(127,127,127,.10) 0 2px,transparent 2px 16px)}
+:root[data-bg="savane"] .body[data-chat]{background-image:linear-gradient(180deg,rgba(242,169,0,.14),transparent 45%)}
+:root[data-bg="nuit"] .body[data-chat]{background-image:radial-gradient(circle at 20% 10%,rgba(143,176,255,.18),transparent 45%),radial-gradient(circle at 80% 90%,rgba(122,63,176,.22),transparent 45%)}
 .toast{position:absolute;left:16px;right:16px;bottom:90px;background:var(--ink);color:#111;padding:12px 14px;border-radius:12px;font-size:14px}
 </style>
 </head>
@@ -216,8 +228,10 @@ function authView(signup = false) {
 }
 
 async function start() {
-  const { data } = await sb.from("profiles").select("display_name,status,avatar_url").eq("id", me.id).single();
+  let { data, error: pErr } = await sb.from("profiles").select("display_name,status,avatar_url,theme,chat_bg,pro_until").eq("id", me.id).single();
+  if (pErr) ({ data } = await sb.from("profiles").select("display_name,status,avatar_url").eq("id", me.id).single());
   profile = data || { display_name: "" };
+  applyTheme();
   if (data) { LS.set("user", { id: me.id }); LS.set("profile", profile); }
   flushOutbox();
   listenCalls();
@@ -267,7 +281,7 @@ async function listView() {
 async function chatView(c, title, url) {
   stop();
   const list = h("div", { class: "msgs" });
-  const box = h("div", { class: "body" }, list);
+  const box = h("div", { class: "body", "data-chat": "1" }, list);
   const inp = h("input", { class: "inp", "aria-label": "Écrire un message", placeholder: "Écrire un message", maxlength: 4000 });
   const send = h("button", { class: "btn" }, "Envoyer");
   const sub = h("div", { class: "mut ell" });
@@ -1056,6 +1070,47 @@ function composeView() {
     h("div", { class: "bar" }, go));
 }
 
+// ---------- Bomoko Pro : apparence ----------
+const THEMES = { noir: ["Noir", "#000", "#4CC9A0"], minuit: ["Minuit", "#05070F", "#8FB0FF"], foret: ["Forêt", "#030A06", "#5FE0B0"], prune: ["Prune", "#0A050E", "#D3A5FF"], clair: ["Clair", "#FBF7F0", "#0B6B4C"] };
+const WALLS = { aucun: "Aucun", points: "Points", vagues: "Rayures", savane: "Savane", nuit: "Nuit" };
+const isPro = () => !!(profile && profile.pro_until && new Date(profile.pro_until) > new Date());
+function applyTheme(prevTheme, prevBg) {
+  const r = document.documentElement, ok = isPro();
+  r.dataset.theme = prevTheme || (ok && profile && profile.theme) || "noir";
+  r.dataset.bg = prevBg || (ok && profile && profile.chat_bg) || "aucun";
+}
+function customizeView() {
+  stop();
+  const pro = isPro();
+  const msg = h("div", { class: "mut", role: "status" }, pro ? "Choisis ton style." : "Aperçu libre : l’enregistrement est réservé à Bomoko Pro.");
+  const pick = async (col, val) => {
+    if (!pro) {
+      applyTheme(col === "theme" ? val : document.documentElement.dataset.theme, col === "chat_bg" ? val : document.documentElement.dataset.bg);
+      msg.textContent = "Aperçu : l’enregistrement est réservé à Bomoko Pro.";
+      return;
+    }
+    const { error } = await sb.from("profiles").update({ [col]: val }).eq("id", me.id);
+    if (error) return toast("Enregistrement impossible. Réessaie.");
+    profile[col] = val; LS.set("profile", profile); applyTheme(); msg.textContent = "Style enregistré."; render();
+  };
+  const grid = h("div", { style: "display:flex;flex-wrap:wrap;gap:12px" });
+  const grid2 = h("div", { style: "display:flex;flex-wrap:wrap;gap:8px" });
+  const render = () => {
+    const cur = document.documentElement.dataset;
+    grid.replaceChildren(...Object.entries(THEMES).map(([k, [name, bg, ac]]) => h("button", { "aria-label": "Thème " + name, "aria-pressed": String(cur.theme === k),
+      style: "width:78px;border:0;background:none;color:var(--ink);display:flex;flex-direction:column;align-items:center;gap:6px;font-size:13px", onclick: () => { pick("theme", k); render(); } },
+      h("div", { style: "width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg," + bg + " 50%," + ac + " 50%);border:3px solid " + (cur.theme === k ? "var(--gl)" : "var(--in)") }), name)));
+    grid2.replaceChildren(...Object.entries(WALLS).map(([k, name]) => h("button", { class: "btn" + (cur.bg === k ? "" : " alt"), "aria-pressed": String(cur.bg === k),
+      style: "height:40px;padding:0 14px;font-size:14px;border:1px solid var(--in)", onclick: () => { pick("chat_bg", k); render(); } }, name)));
+  };
+  render();
+  const back = () => { applyTheme(); profView(); };
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: back }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, "Apparence" + (pro ? "" : " · Pro"))),
+    h("div", { class: "body pad" }, msg, h("div", { style: "font-weight:600" }, "Thème"), grid, h("div", { style: "font-weight:600;margin-top:8px" }, "Fond des discussions"), grid2));
+}
+
 // ---------- Profil ----------
 async function shrink(file) {
   const u = URL.createObjectURL(file);
@@ -1093,6 +1148,10 @@ function profView() {
       h("div", { style: "align-self:center" }, av(profile?.display_name, profile?.avatar_url, 96)),
       pick,
       h("button", { class: "btn alt", onclick: () => pick.click() }, "Changer la photo"),
+      h("div", { style: "background:var(--bar);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px" },
+        h("div", { style: "font-weight:600;font-size:18px" }, isPro() ? "Bomoko Pro ✓" : "Bomoko Pro"),
+        h("div", { class: "mut" }, isPro() ? "Actif jusqu’au " + new Date(profile.pro_until).toLocaleDateString("fr") + "." : "Thèmes, fonds de discussion, profil professionnel et gros fichiers. Le paiement arrive bientôt."),
+        h("button", { class: "btn", style: "height:44px", onclick: customizeView }, isPro() ? "Personnaliser l’apparence" : "Essayer les thèmes")),
       h("label", {}, "Ton nom", nm),
       h("label", {}, "Statut", st),
       h("button", { class: "btn", onclick: async () => {
@@ -1118,7 +1177,7 @@ sb.auth.onAuthStateChange((ev, s) => {
     const u = LS.get("user");
     // Sans réseau, on ouvre l'app avec ce qui est gardé sur le téléphone
     if (!navigator.onLine && u && ev !== "SIGNED_OUT") {
-      if (!me) { me = { id: u.id, offline: true }; profile = LS.get("profile") || { display_name: "" }; listView(); }
+      if (!me) { me = { id: u.id, offline: true }; profile = LS.get("profile") || { display_name: "" }; applyTheme(); listView(); }
       return;
     }
     me = null; profile = null; authView(); return;
