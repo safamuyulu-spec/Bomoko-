@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-14a">
+<meta name="app-version" content="2026-11-14b">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -232,7 +232,10 @@ function authView(signup = false) {
     h("label", {}, "E-mail", em),
     h("label", {}, "Mot de passe", pw),
     err, go,
-    h("button", { class: "btn alt", onclick: () => authView(!signup) }, signup ? "J’ai déjà un compte" : "Créer un compte")));
+    h("button", { class: "btn alt", onclick: () => authView(!signup) }, signup ? "J’ai déjà un compte" : "Créer un compte"),
+    h("div", { style: "display:flex;gap:14px;justify-content:center;flex-wrap:wrap;font-size:13px" },
+      ...[["help", "Aide"], ["privacy", "Confidentialité"], ["terms", "Conditions"]].map(([k, t]) =>
+        h("button", { style: "border:0;background:none;color:var(--gl);text-decoration:underline;padding:6px", onclick: () => legalView(k, () => authView(signup)) }, t)))));
 }
 
 async function start() {
@@ -1268,8 +1271,123 @@ function profView() {
       h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px;cursor:pointer" }, rr, "Confirmation de lecture (✓✓)"),
       h("div", { class: "mut", style: "font-size:13px;margin-top:-6px" }, "Si tu la désactives, tu ne verras plus non plus quand les autres ont lu tes messages."),
       h("button", { class: "btn alt", onclick: showMyQr }, "Mon code QR"),
+      h("div", { style: "display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--line);padding-top:12px" },
+        h("div", { class: "mut" }, "Aide et informations"),
+        ...[["help", "Aide"], ["privacy", "Politique de confidentialité"], ["terms", "Conditions d’utilisation"]].map(([k, t]) =>
+          h("button", { class: "btn alt", style: "text-align:left;padding:0", onclick: () => legalView(k, profView) }, t)),
+        h("div", { class: "mut", style: "font-size:12px;margin-top:4px" }, "Version " + (APP_VERSION || ""))),
       h("button", { class: "btn alt", onclick: () => { LS.clear(); sb.auth.signOut(); } }, "Se déconnecter")),
     tabs("p"));
+}
+
+// ---------- Pages : aide, confidentialité, conditions d'utilisation ----------
+// À renseigner avant de publier largement l'app : nom de l'éditeur et adresse de contact.
+const LEGAL = { editeur: "[nom de l’éditeur à renseigner]", contact: "[adresse e-mail de contact à renseigner]", age: 16, maj: "14 novembre 2026" };
+const PAGES = {
+  help: { t: "Aide", s: [
+    ["Premiers pas", [
+      "• Crée ton compte avec ton nom, ton adresse e-mail et un mot de passe (6 caractères minimum).",
+      "• Pour discuter avec quelqu’un, envoie-lui une demande d’ami depuis la page Amis (bouton « Amis » ou « + »). Vous pouvez discuter dès qu’il l’a acceptée.",
+      "• Tu peux aussi montrer ton code QR (Profil, puis « Mon code QR ») ou scanner celui d’un ami (page Amis, bouton « Scanner »)."]],
+    ["Discussions", [
+      "• Appuie sur un de tes messages pour le modifier, pendant 15 minutes après l’envoi.",
+      "• Le bouton 📎 permet d’envoyer une photo, une vidéo, un audio, un document (25 Mo maximum) ou le contact d’un ami. Le bouton 🎤 enregistre un message vocal (5 minutes maximum).",
+      "• ✓ veut dire « envoyé » et ✓✓ « lu ». Tu peux désactiver cette confirmation dans le Profil ; tu ne verras alors plus non plus quand les autres ont lu tes messages."]],
+    ["Appels", [
+      "• Les boutons 📞 (audio) et 📹 (vidéo) apparaissent en haut d’une discussion à deux. Il faut être amis.",
+      "• Le téléphone ne sonne que si Bomoko est ouvert. Si tu manques un appel, un message « Appel manqué » avec un bouton « Rappeler » apparaît dans la discussion.",
+      "• Autorise le micro (et la caméra) quand ton navigateur le demande. Bomoko n’est pas un service d’appels d’urgence."]],
+    ["Statuts", [
+      "• Un statut (texte ou photo) disparaît après 24 heures. Avant de publier, choisis qui peut le voir : tes amis, tout le monde sur Bomoko, des personnes précises, ou toi seul.",
+      "• Tu vois qui a regardé ton statut et qui l’a aimé. Tu peux mentionner des personnes."]],
+    ["Groupes", [
+      "• Page Amis, puis « Nouveau groupe » : choisis un nom et des amis. Un groupe ne peut contenir que des amis de la personne qui le crée.",
+      "• La gestion des groupes (ajouter, retirer des membres, quitter) arrive bientôt."]],
+    ["Sans internet", [
+      "• Bomoko s’ouvre sans réseau et affiche tes derniers messages. Un message écrit hors ligne apparaît avec « ⏳ en attente » et part tout seul quand le réseau revient.",
+      "• Les photos, fichiers, messages vocaux et appels demandent du réseau."]],
+    ["Installer Bomoko et le mettre à jour", [
+      "• Dans Chrome, ouvre le menu ⋮, puis « Installer l’application » ou « Ajouter à l’écran d’accueil ».",
+      "• Quand une nouvelle version existe, un bandeau jaune s’affiche : appuie sur « Mettre à jour »."]],
+    ["Profil, badge et Pro", [
+      "• Dans le Profil, tu peux changer ta photo, ton nom et ton statut.",
+      "• Le badge bleu ✓ indique un compte certifié par Bomoko. Il peut être retiré, et il disparaît si le nom du compte change.",
+      "• Bomoko Pro est une option payante (thèmes, fonds de discussion…). Le paiement arrive bientôt."]],
+    ["Un problème ?", [
+      "• « Impossible de charger » : vérifie ton réseau, puis recharge la page ou ferme et rouvre l’app.",
+      "• Pas de son ou pas d’image pendant un appel : vérifie les autorisations du micro et de la caméra dans ton navigateur.",
+      "• Le blocage et le signalement dans l’app arrivent bientôt. En attendant, écris-nous : {contact}.",
+      "• Pour demander la suppression de ton compte ou de tes données : {contact}."]]
+  ] },
+  privacy: { t: "Politique de confidentialité", s: [
+    ["Qui sommes-nous", ["Bomoko est une application de messagerie éditée par {editeur}. Contact : {contact}. Dernière mise à jour : {maj}."]],
+    ["Les données que nous traitons", [
+      "• Compte : adresse e-mail, mot de passe (il est protégé par le service de connexion et nous ne pouvons pas le lire) et nom affiché.",
+      "• Profil : photo, statut, thème et réglages (par exemple la confirmation de lecture).",
+      "• Contenus : messages, messages vocaux, photos, vidéos, audios, documents, contacts partagés et statuts.",
+      "• Appels : qui appelle qui, quand, le type (audio ou vidéo) et l’état de l’appel. Le contenu des appels n’est pas enregistré.",
+      "• Relations : demandes d’amis, amis et groupes.",
+      "• Données techniques : adresse IP et journaux nécessaires au fonctionnement et à la sécurité chez nos prestataires.",
+      "• Sur ton téléphone : une copie de tes derniers messages et des messages en attente, pour le mode hors ligne. Elle est effacée quand tu te déconnectes."]],
+    ["Pourquoi nous les utilisons", [
+      "Pour faire fonctionner Bomoko (comptes, discussions, appels, statuts), protéger le service contre les abus et corriger les erreurs. Nous ne vendons pas tes données et nous n’affichons pas de publicité."]],
+    ["Qui peut voir quoi", [
+      "• Tes messages et fichiers : les membres de la discussion.",
+      "• Ton nom, ta photo et ton statut de profil : les autres utilisateurs de Bomoko, pour qu’ils puissent te trouver.",
+      "• Tes statuts : les personnes que tu as choisies au moment de publier.",
+      "• Le badge de certification est public."]],
+    ["Nos prestataires", [
+      "Bomoko fait appel à : Supabase (comptes, base de données et stockage des fichiers), Agora (transmission des appels audio et vidéo), GitHub Pages (hébergement de l’application) et Google Fonts (polices de caractères). Ils traitent des données pour faire fonctionner le service."]],
+    ["Sécurité", [
+      "Les échanges sont chiffrés (HTTPS) et les fichiers sont stockés dans un espace privé. Attention : les messages ne sont pas chiffrés de bout en bout. Techniquement, l’administrateur du service peut y accéder ; nous nous engageons à ne pas les consulter, sauf en cas d’obligation légale, de signalement d’abus ou d’incident de sécurité.",
+      "Si tu découvres une faille de sécurité, écris-nous à {contact} avant de la rendre publique."]],
+    ["Durée de conservation", [
+      "• Messages et fichiers : tant que ton compte existe, sauf suppression.",
+      "• Statuts : ils disparaissent après 24 heures.",
+      "• Si ton compte est supprimé, tes données personnelles sont supprimées, sauf ce que la loi nous oblige à conserver."]],
+    ["Tes droits", [
+      "Tu peux demander l’accès à tes données, leur correction, leur suppression ou t’opposer à leur traitement en écrivant à {contact}. La suppression directe du compte dans l’application arrive bientôt."]],
+    ["Âge minimum", ["Bomoko est réservé aux personnes de {age} ans et plus."]],
+    ["Changements", ["Nous pouvons modifier cette politique. La date de mise à jour est indiquée en haut de la page, et un changement important sera annoncé dans l’application."]]
+  ] },
+  terms: { t: "Conditions d’utilisation", s: [
+    ["Acceptation", ["En créant un compte ou en utilisant Bomoko, tu acceptes ces conditions et la politique de confidentialité. Dernière mise à jour : {maj}. Éditeur : {editeur}."]],
+    ["Ton compte", [
+      "• Tu dois avoir {age} ans ou plus et donner des informations exactes.",
+      "• Tu es responsable de ton mot de passe et de ce qui se passe avec ton compte. Un compte est personnel.",
+      "• Il est interdit de se faire passer pour quelqu’un d’autre."]],
+    ["Règles d’utilisation", [
+      "Il est interdit d’utiliser Bomoko pour : harceler, menacer ou humilier ; diffuser des contenus haineux, violents ou illégaux ; partager des contenus sexuels impliquant des mineurs (interdit absolument et signalé aux autorités) ; escroquer ou tromper ; envoyer des messages non sollicités en masse ; diffuser des logiciels malveillants ; violer la vie privée ou les droits d’auteur d’autrui ; attaquer, perturber ou tenter d’accéder sans autorisation au service ou aux données des autres."]],
+    ["Tes contenus", [
+      "Tes messages, photos, vidéos et autres contenus restent à toi. Tu nous autorises seulement à les héberger et à les transmettre aux personnes que tu choisis, pour faire fonctionner Bomoko. Tu es responsable de ce que tu envoies et publies."]],
+    ["Modération et certification", [
+      "Nous pouvons suspendre ou supprimer un compte qui ne respecte pas ces conditions, ou supprimer un contenu. Le badge de certification est accordé par l’éditeur et peut être retiré."]],
+    ["Bomoko Pro", [
+      "Bomoko Pro est une option payante qui donne accès à des fonctions supplémentaires. Le prix, le mode de paiement et les conditions de résiliation seront indiqués avant tout paiement."]],
+    ["Appels et disponibilité", [
+      "• Les appels demandent une bonne connexion internet. Bomoko n’est pas un service d’appels d’urgence.",
+      "• Le service est fourni « en l’état » : il peut être interrompu, modifié ou comporter des erreurs. Nous faisons de notre mieux pour qu’il reste disponible et sûr."]],
+    ["Responsabilité", ["Dans les limites permises par la loi, l’éditeur n’est pas responsable des contenus échangés entre les utilisateurs ni des dommages indirects liés à l’usage du service."]],
+    ["Sécurité et signalement de failles", [
+      "Si tu trouves une faille de sécurité, écris à {contact} avant de la rendre publique. N’accède pas aux données d’autres personnes, ne perturbe pas le service et ne teste pas sur des comptes qui ne sont pas les tiens."]],
+    ["Fin du compte", ["Tu peux arrêter d’utiliser Bomoko quand tu veux et demander la suppression de ton compte à {contact}."]],
+    ["Droit applicable et contact", ["Ces conditions sont régies par le droit applicable en République démocratique du Congo. Pour toute question : {contact}."]]
+  ] }
+};
+function legalView(key, back) {
+  stop();
+  const pg = PAGES[key];
+  const fill = t => t.split("{editeur}").join(LEGAL.editeur).split("{contact}").join(LEGAL.contact).split("{age}").join(LEGAL.age).split("{maj}").join(LEGAL.maj);
+  const goBack = back || (me ? profView : () => authView(false));
+  const els = [];
+  pg.s.forEach(([t, ps]) => {
+    els.push(h("h2", { style: "margin:14px 0 0;font-size:17px" }, t));
+    ps.forEach(p => els.push(h("p", { style: "margin:0;line-height:1.5" }, fill(p))));
+  });
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => goBack() }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, pg.t)),
+    h("div", { class: "body pad", style: "gap:8px" }, ...els));
 }
 
 // ---------- Installation sur l'écran d'accueil ----------
