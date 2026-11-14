@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-13b">
+<meta name="app-version" content="2026-11-14a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -236,7 +236,7 @@ function authView(signup = false) {
 }
 
 async function start() {
-  let { data, error: pErr } = await sb.from("profiles").select("display_name,status,avatar_url,theme,chat_bg,pro_until,verified").eq("id", me.id).single();
+  let { data, error: pErr } = await sb.from("profiles").select("display_name,status,avatar_url,theme,chat_bg,pro_until,verified,read_receipts").eq("id", me.id).single();
   if (pErr) ({ data } = await sb.from("profiles").select("display_name,status,avatar_url").eq("id", me.id).single());
   profile = data || { display_name: "" };
   applyTheme();
@@ -304,9 +304,9 @@ async function chatView(c, title, url) {
       h("button", { class: "btn alt", "aria-label": "Joindre un fichier ou un contact", style: "padding:0 8px;font-size:22px", onclick: () => attachMenu(c, add) }, "📎"), inp,
       h("button", { class: "btn alt", "aria-label": "Enregistrer un message vocal", style: "padding:0 8px;font-size:22px", onclick: () => recordVoice(c, add) }, "🎤"), send));
 
-  const names = {};
-  const { data: mem } = await withTimeout(sb.from("conversation_members").select("user_id,profiles(display_name,status,verified)").eq("conversation_id", c.id), 6000);
-  for (const m of mem || []) names[m.user_id] = m.profiles?.display_name || "";
+  const names = {}, reads = {};
+  const { data: mem } = await withTimeout(sb.from("conversation_members").select("user_id,last_read_at,profiles(display_name,status,verified)").eq("conversation_id", c.id), 6000);
+  for (const m of mem || []) { names[m.user_id] = m.profiles?.display_name || ""; reads[m.user_id] = m.last_read_at; }
   if (!c.is_group) sub.textContent = (mem || []).find(m => m.user_id !== me.id)?.profiles?.status || "";
   if (!c.is_group && (mem || []).find(m => m.user_id !== me.id)?.profiles?.verified) tn.append(badge());
 
@@ -315,6 +315,27 @@ async function chatView(c, title, url) {
   const els = new Map();
   const ckey = "msgs:" + c.id, hist = [], pend = new Map();
   let loaded = false;
+  const ticks = new Map();
+  const refreshTicks = () => {
+    const others = Object.entries(reads).filter(([u]) => u !== me.id).map(([, t]) => t);
+    const upTo = profile?.read_receipts !== false && others.length && others.every(Boolean) ? Math.min(...others.map(t => +new Date(t))) : null;
+    ticks.forEach(({ el, t }) => {
+      const read = upTo !== null && +new Date(t) <= upTo;
+      el.textContent = read ? "✓✓" : "✓";
+      el.style.color = read ? "#4CC9A0" : "inherit";
+    });
+  };
+  let marked = null, mt;
+  const markRead = () => {
+    clearTimeout(mt);
+    mt = setTimeout(async () => {
+      if (profile?.read_receipts === false || !navigator.onLine || document.hidden || !lastAt) return;
+      if (marked && +new Date(lastAt) <= +new Date(marked)) return;
+      const at = lastAt; marked = at;
+      const { error } = await sb.from("conversation_members").update({ last_read_at: at }).eq("conversation_id", c.id).eq("user_id", me.id);
+      if (error) marked = null;
+    }, 800);
+  };
   const showPending = it => {
     if (pend.has(it.id) || seen.has(it.id)) return;
     const b = h("div", { class: "b me", style: "opacity:.6" }, it.body, h("span", { style: "font-size:11px;margin-left:6px" }, "⏳ en attente"));
@@ -328,6 +349,7 @@ async function chatView(c, title, url) {
     if (!b) return;
     b.replaceChildren(m.body);
     if (m.edited_at) b.append(h("span", { style: "font-size:11px;margin-left:6px;opacity:.7" }, "modifié"));
+    { const tk = ticks.get(m.id); if (tk) b.append(tk.el); }
     if (m.sender_id === me.id) b.onclick = () => editMsg(m);
   };
   const editMsg = m => {
@@ -364,13 +386,18 @@ async function chatView(c, title, url) {
       if (mine) { b.style.cursor = "pointer"; b.onclick = () => editMsg(m); }
       els.set(m.id, b); list.append(b);
     }
+    if (mine) {
+      const bb = list.lastElementChild;
+      if (bb) { const tk = h("span", { style: "font-size:11px;margin-left:6px;opacity:.85;white-space:nowrap;align-self:flex-end" }, "✓"); bb.append(tk); ticks.set(m.id, { el: tk, t: m.created_at }); }
+    } else markRead();
     box.scrollTop = box.scrollHeight;
   };
   (LS.get(ckey) || []).forEach(add);   // affichage immédiat depuis le téléphone
   const { data: old, error: oldErr } = await withTimeout(sb.from("messages").select("*").eq("conversation_id", c.id)
     .order("created_at", { ascending: false }).limit(60), 10000);
-  if (!oldErr && old) { list.replaceChildren(); seen.clear(); els.clear(); hist.length = 0; pend.clear(); lastAt = null; old.slice().reverse().forEach(add); }
+  if (!oldErr && old) { list.replaceChildren(); seen.clear(); els.clear(); hist.length = 0; pend.clear(); ticks.clear(); lastAt = null; old.slice().reverse().forEach(add); }
   loaded = true; LS.set(ckey, hist);
+  refreshTicks(); markRead();
   chatPend = { cid: c.id, show: showPending, done: donePending };
   outbox().filter(x => x.conversation_id === c.id).forEach(showPending);
 
@@ -378,12 +405,16 @@ async function chatView(c, title, url) {
   chan = sb.channel("c-" + c.id)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: "conversation_id=eq." + c.id }, p => add(p.new))
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: "conversation_id=eq." + c.id }, p => upd(p.new))
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "conversation_members", filter: "conversation_id=eq." + c.id }, p => { reads[p.new.user_id] = p.new.last_read_at; refreshTicks(); })
     .subscribe();
   poll = setInterval(async () => {
     let q = sb.from("messages").select("*").eq("conversation_id", c.id).order("created_at");
     if (lastAt) q = q.gt("created_at", lastAt);
     const { data } = await q;
     (data || []).forEach(add);
+    const { data: rd } = await sb.from("conversation_members").select("user_id,last_read_at").eq("conversation_id", c.id);
+    (rd || []).forEach(r => { reads[r.user_id] = r.last_read_at; });
+    refreshTicks(); markRead();
   }, 8000);
 
   const doSend = async () => {
@@ -1189,6 +1220,13 @@ function profView() {
   stop();
   const nm = h("input", { class: "inp", value: profile?.display_name || "", maxlength: 40 });
   const st = h("input", { class: "inp", value: profile?.status || "", maxlength: 80, placeholder: "Ex. : Disponible" });
+  const rr = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:var(--g)" });
+  rr.checked = profile?.read_receipts !== false;
+  rr.onchange = async () => {
+    const { error } = await sb.from("profiles").update({ read_receipts: rr.checked }).eq("id", me.id);
+    if (error) { rr.checked = !rr.checked; toast("Réglage non enregistré."); }
+    else { profile.read_receipts = rr.checked; toast(rr.checked ? "Confirmation de lecture activée." : "Confirmation de lecture désactivée."); }
+  };
   const msg = h("div", { class: "mut", role: "status" });
   const pick = h("input", { type: "file", accept: "image/*", style: "display:none" });
   pick.onchange = async () => {
@@ -1227,6 +1265,8 @@ function profView() {
         else { profile.display_name = v; profile.status = st.value.trim(); msg.textContent = "Profil enregistré."; }
       } }, "Enregistrer"),
       msg,
+      h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px;cursor:pointer" }, rr, "Confirmation de lecture (✓✓)"),
+      h("div", { class: "mut", style: "font-size:13px;margin-top:-6px" }, "Si tu la désactives, tu ne verras plus non plus quand les autres ont lu tes messages."),
       h("button", { class: "btn alt", onclick: showMyQr }, "Mon code QR"),
       h("button", { class: "btn alt", onclick: () => { LS.clear(); sb.auth.signOut(); } }, "Se déconnecter")),
     tabs("p"));
