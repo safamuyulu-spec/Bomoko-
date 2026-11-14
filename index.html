@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-13a">
+<meta name="app-version" content="2026-11-13b">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -301,7 +301,8 @@ async function chatView(c, title, url) {
       h("div", { style: "min-width:0;flex:1" }, tn, sub),
       callBtn("audio"), callBtn("video")),
     box, h("div", { class: "bar" },
-      h("button", { class: "btn alt", "aria-label": "Joindre un fichier ou un contact", style: "padding:0 8px;font-size:22px", onclick: () => attachMenu(c, add) }, "📎"), inp, send));
+      h("button", { class: "btn alt", "aria-label": "Joindre un fichier ou un contact", style: "padding:0 8px;font-size:22px", onclick: () => attachMenu(c, add) }, "📎"), inp,
+      h("button", { class: "btn alt", "aria-label": "Enregistrer un message vocal", style: "padding:0 8px;font-size:22px", onclick: () => recordVoice(c, add) }, "🎤"), send));
 
   const names = {};
   const { data: mem } = await withTimeout(sb.from("conversation_members").select("user_id,profiles(display_name,status,verified)").eq("conversation_id", c.id), 6000);
@@ -751,6 +752,59 @@ function rich(m, mine) {
   });
   if (!/^(📷|🎥|🎵|📄) /.test(m.body)) b.append(h("div", {}, m.body));
   return b;
+}
+
+// ---------- Messages vocaux ----------
+async function recordVoice(c, add) {
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Messages vocaux indisponibles sur ce navigateur.");
+  if (!navigator.onLine) return toast("Il faut du réseau pour envoyer un message vocal.");
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { return toast("Autorise le micro pour enregistrer un message vocal."); }
+  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find(t => MediaRecorder.isTypeSupported(t)) || "";
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined);
+  const chunks = [];
+  rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const t0 = Date.now();
+  const fmtT = sec => Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+  const clock = h("div", { style: "flex:1;font-weight:600;color:#FF8A80" }, "● 0:00");
+  const cancel = h("button", { class: "btn alt", style: "padding:0 12px" }, "Annuler");
+  const sendB = h("button", { class: "btn", style: "padding:0 16px" }, "Envoyer");
+  const ui = h("div", { class: "bar", role: "status", style: "position:absolute;left:0;right:0;bottom:0;z-index:6;align-items:center" }, clock, cancel, sendB);
+  $.append(ui);
+  let tick, done = false;
+  const finish = send => {
+    if (done) return;
+    done = true;
+    rec.onstop = async () => {
+      clearInterval(tick); stream.getTracks().forEach(t => t.stop()); ui.remove();
+      if (!send) return;
+      const dur = Math.max(1, Math.round((Date.now() - t0) / 1000));
+      const type = (rec.mimeType || mime || "audio/webm").split(";")[0];
+      const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+      const blob = new Blob(chunks, { type });
+      if (blob.size < 500) return toast("Message vocal trop court.");
+      if (blob.size > 25 * 1024 * 1024) return toast("Message vocal trop long.");
+      toast("Envoi du message vocal…");
+      try {
+        const path = c.id + "/" + crypto.randomUUID() + "-vocal." + ext;
+        const up = await sb.storage.from("chat-files").upload(path, blob, { contentType: type });
+        if (up.error) throw up.error;
+        const { data, error } = await sb.from("messages").insert({ conversation_id: c.id, sender_id: me.id, body: "🎤 Message vocal · " + fmtT(dur), media_path: path, media_type: type, media_name: "vocal." + ext, media_size: blob.size }).select().single();
+        if (error) throw error;
+        add(data);
+      } catch (e) { toast("Envoi impossible. Réessaie."); }
+    };
+    if (rec.state !== "inactive") rec.stop(); else rec.onstop();
+  };
+  cancel.onclick = () => finish(false);
+  sendB.onclick = () => finish(true);
+  tick = setInterval(() => {
+    const sec = Math.floor((Date.now() - t0) / 1000);
+    clock.textContent = "● " + fmtT(sec);
+    if (sec >= 300) finish(true); // 5 minutes maximum
+  }, 500);
+  rec.start();
 }
 
 // Menu « joindre » : photo/vidéo, audio, document, contact
