@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-16a">
+<meta name="app-version" content="2026-11-16b">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -1685,6 +1685,9 @@ async function myShopView() {
       if (e) { open.checked = !open.checked; toast("Action impossible."); } else toast(open.checked ? "Boutique ouverte." : "Boutique fermée.");
     };
     const box = h("div", { style: "display:flex;flex-direction:column;gap:8px" });
+    els.push(h("div", { style: "display:flex;align-items:center;gap:12px" }, av(s.name, pubUrl(s.logo_path), 64),
+      h("div", { style: "min-width:0" }, h("div", { class: "ell", style: "font-weight:600;font-size:18px" }, s.name),
+        h("div", { class: "mut ell" }, [s.category, s.city].filter(Boolean).join(" · ") || " "))));
     els.push(h("button", { class: "btn", onclick: () => ordersView("sell") }, "Commandes reçues" + (newOrders ? " (" + newOrders + ")" : "")),
       h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px" }, open, "Boutique ouverte"),
       h("div", { class: "mut", style: "word-break:break-all;font-size:13px" }, link),
@@ -1711,9 +1714,18 @@ function shopForm(s) {
   const cur = h("select", { class: "inp", "aria-label": "Monnaie" }, [["USD", "Dollars ($)"], ["CDF", "Francs congolais (FC)"]].map(o => h("option", { value: o[0] }, o[1])));
   if (s) { cur.value = s.currency; cur.disabled = true; }
   const logo = h("input", { type: "file", accept: "image/*", style: "display:none" });
-  const logoTxt = h("div", { class: "mut" }, s && s.logo_path ? "Logo enregistré" : "Pas de logo");
+  const logoTxt = h("div", { class: "mut", style: "font-size:13px" }, s && s.logo_path ? "Logo enregistré." : "Pas encore de logo (facultatif).");
+  const logoPrev = h("div", {}, av(s ? s.name : "?", s && s.logo_path ? pubUrl(s.logo_path) : null, 72));
   let logoBlob = null;
-  logo.onchange = async () => { if (logo.files[0]) { logoBlob = await shrink(logo.files[0]); logoTxt.textContent = "Logo choisi : " + logo.files[0].name; } };
+  logo.onchange = async () => {
+    const f = logo.files[0];
+    if (!f) return;
+    try {
+      logoBlob = await shrink(f);
+      logoPrev.replaceChildren(av(name.value || "?", URL.createObjectURL(logoBlob), 72));
+      logoTxt.textContent = "Logo choisi. Appuie sur « " + (s ? "Enregistrer" : "Créer ma boutique") + " » pour le garder.";
+    } catch (e) { toast("Image non lisible. Essaie une photo JPEG ou PNG."); }
+  };
   const save = h("button", { class: "btn" }, s ? "Enregistrer" : "Créer ma boutique");
   save.onclick = async () => {
     const nm = name.value.trim();
@@ -1746,10 +1758,16 @@ function shopForm(s) {
       myShopView();
     } catch (e) { save.disabled = false; toast("Enregistrement impossible. Vérifie ton réseau et que Bomoko Pro est actif."); }
   };
-  return [h("label", {}, "Nom", name), h("label", {}, "Catégorie", cat), h("label", {}, "Ville", city), h("label", {}, "Description", desc),
+  return [
+    h("div", { style: "display:flex;gap:12px;align-items:center" }, logoPrev,
+      h("div", { style: "display:flex;flex-direction:column;gap:4px;align-items:flex-start" },
+        h("button", { class: "btn", style: "height:40px;padding:0 14px;font-size:14px", onclick: () => logo.click() }, s && s.logo_path ? "Changer le logo" : "Ajouter un logo"),
+        logoTxt)),
+    logo,
+    h("label", {}, "Nom", name), h("label", {}, "Catégorie", cat), h("label", {}, "Ville", city), h("label", {}, "Description", desc),
     h("label", {}, "Horaires", hours), h("label", {}, "Téléphone (facultatif, public)", phone),
     h("label", {}, s ? "Monnaie (non modifiable)" : "Monnaie des prix", cur),
-    h("div", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn alt", onclick: () => logo.click() }, "Logo"), logoTxt), logo, save];
+    save];
 }
 
 async function productsPanel(s, box) {
