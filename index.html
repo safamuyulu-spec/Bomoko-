@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-14c">
+<meta name="app-version" content="2026-11-16a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -205,6 +205,7 @@ const fr = m =>
 const tabs = on => h("nav", { class: "tabs" },
   h("button", { class: on === "l" ? "on" : "", onclick: listView }, "Discussions"),
   h("button", { class: on === "s" ? "on" : "", onclick: statusView }, "Statuts"),
+  h("button", { class: on === "b" ? "on" : "", "data-tab": "b", onclick: shopsView }, "Boutiques" + (newOrders ? " (" + newOrders + ")" : "")),
   h("button", { class: on === "p" ? "on" : "", onclick: profView }, "Profil"));
 
 // ---------- Connexion ----------
@@ -245,8 +246,10 @@ async function start() {
   applyTheme();
   if (data) { LS.set("user", { id: me.id }); LS.set("profile", profile); }
   flushOutbox();
+  refreshOrderBadge(); if (!window.__ob) window.__ob = setInterval(refreshOrderBadge, 30000);
   listenCalls();
   listView();
+  if (pendingShop) { const sl = pendingShop; pendingShop = null; history.replaceState(null, "", location.pathname); setTimeout(() => shopView(sl, listView), 300); }
   const addId = new URLSearchParams(location.search).get("add");
   if (addId && UUID_RE.test(addId)) { history.replaceState(null, "", location.pathname); setTimeout(() => friendSheet(addId), 300); }
 }
@@ -1256,8 +1259,9 @@ function profView() {
       h("button", { class: "btn alt", onclick: () => pick.click() }, "Changer la photo"),
       h("div", { style: "background:var(--bar);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px" },
         h("div", { style: "font-weight:600;font-size:18px" }, isPro() ? "Bomoko Pro ✓" : "Bomoko Pro"),
-        h("div", { class: "mut" }, isPro() ? "Actif jusqu’au " + new Date(profile.pro_until).toLocaleDateString("fr") + "." : "Thèmes, fonds de discussion, profil professionnel et gros fichiers. Le paiement arrive bientôt."),
-        h("button", { class: "btn", style: "height:44px", onclick: customizeView }, isPro() ? "Personnaliser l’apparence" : "Essayer les thèmes")),
+        h("div", { class: "mut" }, isPro() ? "Actif jusqu’au " + new Date(profile.pro_until).toLocaleDateString("fr") + "." : "Boutique en ligne avec catalogue et commandes, puis chaînes. Thèmes et fonds de discussion inclus. Le paiement arrive bientôt."),
+        isPro() ? h("button", { class: "btn", style: "height:44px", onclick: myShopView }, "Ma boutique") : h("button", { class: "btn", style: "height:44px", onclick: proSell }, "Vendre avec Bomoko Pro"),
+        h("button", { class: "btn alt", style: "height:44px", onclick: customizeView }, isPro() ? "Personnaliser l’apparence" : "Essayer les thèmes")),
       h("label", {}, "Ton nom", nm),
       h("label", {}, "Statut", st),
       h("button", { class: "btn", onclick: async () => {
@@ -1308,6 +1312,14 @@ const PAGES = {
     ["Installer Bomoko et le mettre à jour", [
       "• Dans Chrome, ouvre le menu ⋮, puis « Installer l’application » ou « Ajouter à l’écran d’accueil ».",
       "• Quand une nouvelle version existe, un bandeau jaune s’affiche : appuie sur « Mettre à jour »."]],
+    ["Boutiques", [
+      "• L’onglet Boutiques liste les boutiques de Bomoko : cherche par nom, catégorie ou ville, ouvre une boutique pour voir son catalogue et écris au vendeur.",
+      "• Avec Bomoko Pro, tu peux créer ta boutique (Profil, puis « Ma boutique ») : ajoute des produits avec photo et prix (100 maximum), ouvre ou ferme ta boutique, et partage son lien ou son code QR. Tout le monde peut voir une boutique, même sans compte Bomoko.",
+      "• Les commandes dans la discussion arrivent bientôt."]],
+    ["Boutiques et commandes", [
+      "• L’onglet Boutiques liste les boutiques des vendeurs Pro. Ouvre une boutique, ajoute des produits au panier, puis « Envoyer la commande ».",
+      "• Tu suis ta commande dans « Commandes » : nouvelle, confirmée, prête, livrée. Tu peux l’annuler tant que le vendeur ne l’a pas confirmée. Le paiement et la livraison se règlent directement avec le vendeur.",
+      "• Si tu es vendeur Pro : « Ma boutique » pour créer ta vitrine et ton catalogue, « Commandes reçues » pour confirmer, préparer et livrer. Le bouton « Écrire » te met en contact avec l’acheteur."]],
     ["Profil, badge et Pro", [
       "• Dans le Profil, tu peux changer ta photo, ton nom et ton statut.",
       "• Le badge bleu ✓ indique un compte certifié par Bomoko. Il peut être retiré, et il disparaît si le nom du compte change.",
@@ -1326,8 +1338,11 @@ const PAGES = {
       "• Contenus : messages, messages vocaux, photos, vidéos, audios, documents, contacts partagés et statuts.",
       "• Appels : qui appelle qui, quand, le type (audio ou vidéo) et l’état de l’appel. Le contenu des appels n’est pas enregistré.",
       "• Relations : demandes d’amis, amis et groupes.",
+      "• Commandes : produits commandés, message au vendeur et statut, visibles par l’acheteur et par le vendeur.",
       "• Données techniques : adresse IP et journaux nécessaires au fonctionnement et à la sécurité chez nos prestataires.",
       "• Sur ton téléphone : une copie de tes derniers messages et des messages en attente, pour le mode hors ligne. Elle est effacée quand tu te déconnectes."]],
+    ["Boutiques", [
+      "Les informations d’une boutique (nom, description, horaires, ville, téléphone si tu le renseignes, produits, prix et photos) sont publiques : toute personne qui a le lien peut les voir, même sans compte Bomoko."]],
     ["Pourquoi nous les utilisons", [
       "Pour faire fonctionner Bomoko (comptes, discussions, appels, statuts), protéger le service contre les abus et corriger les erreurs. Nous ne vendons pas tes données et nous n’affichons pas de publicité."]],
     ["Qui peut voir quoi", [
@@ -1361,6 +1376,12 @@ const PAGES = {
       "Tes messages, photos, vidéos et autres contenus restent à toi. Tu nous autorises seulement à les héberger et à les transmettre aux personnes que tu choisis, pour faire fonctionner Bomoko. Tu es responsable de ce que tu envoies et publies."]],
     ["Modération et certification", [
       "Nous pouvons suspendre ou supprimer un compte qui ne respecte pas ces conditions, ou supprimer un contenu. Le badge de certification est accordé par l’éditeur et peut être retiré."]],
+    ["Boutiques et vendeurs", [
+      "Les vendeurs sont seuls responsables de leurs produits, de leurs prix, de leurs livraisons et de leurs relations avec leurs clients. Bomoko n’est pas partie aux ventes. Il est interdit de vendre des produits illégaux, dangereux, contrefaits ou trompeurs. Une boutique peut être masquée ou supprimée si elle ne respecte pas ces conditions, et elle n’est plus visible quand l’abonnement Pro prend fin."]],
+    ["Boutiques et commandes", [
+      "• Les vendeurs sont responsables de leurs annonces (produits, prix, descriptions) et de leurs ventes. Il est interdit de vendre des produits illégaux, dangereux, contrefaits ou trompeurs.",
+      "• Bomoko met en relation vendeurs et acheteurs. Bomoko n’est pas partie au contrat de vente, ne traite pas le paiement et ne garantit ni la livraison ni la qualité des produits. Vérifie le vendeur avant de payer.",
+      "• Nous pouvons masquer une boutique ou un produit qui ne respecte pas ces conditions."]],
     ["Bomoko Pro", [
       "Bomoko Pro est une option payante qui donne accès à des fonctions supplémentaires. Le prix, le mode de paiement et les conditions de résiliation seront indiqués avant tout paiement."]],
     ["Appels et disponibilité", [
@@ -1389,6 +1410,407 @@ function legalView(key, back) {
     h("div", { class: "body pad", style: "gap:8px" }, ...els));
 }
 
+// ---------- Boutiques : vitrine et catalogue ----------
+let pendingShop = (new URLSearchParams(location.search).get("shop") || "").toLowerCase();
+if (!/^[a-z0-9-]{3,30}$/.test(pendingShop)) pendingShop = null;
+const SHOP_CATS = ["Alimentation", "Mode et beauté", "Électronique", "Maison", "Artiste / musique", "Éducation", "Église / association", "Services", "Autre"];
+const money = (v, cur) => cur === "CDF" ? Math.round(v).toLocaleString("fr") + " FC" : Number(v).toLocaleString("fr", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " $";
+const slugify = t => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+const shopLink = slug => location.origin + location.pathname + "?shop=" + slug;
+const pubUrl = path => path ? sb.storage.from("shop-media").getPublicUrl(path).data.publicUrl : null;
+const thumbEl = (p, z = 56) => p.photo_path
+  ? h("img", { src: pubUrl(p.photo_path), alt: p.name || "", loading: "lazy", style: "width:" + z + "px;height:" + z + "px;object-fit:cover;border-radius:10px;flex:none;background:#222" })
+  : h("div", { style: "width:" + z + "px;height:" + z + "px;border-radius:10px;flex:none;background:var(--bub);display:flex;align-items:center;justify-content:center;font-size:" + Math.round(z / 2.3) + "px" }, "🛍️");
+
+async function shareLink(link, title) {
+  try { if (navigator.share) { await navigator.share({ title, text: title + " sur Bomoko", url: link }); return; } }
+  catch (e) { if (e && e.name === "AbortError") return; }
+  try { await navigator.clipboard.writeText(link); toast("Lien copié."); } catch (e) { toast("Copie impossible : " + link); }
+}
+function qrSheet(link, title, hint) {
+  const box = h("div", { style: "background:#fff;padding:12px;border-radius:14px;align-self:center;line-height:0" });
+  try { const qr = qrcode(0, "M"); qr.addData(link); qr.make(); box.innerHTML = qr.createSvgTag(6, 0); }
+  catch (e) { box.style.lineHeight = "1.4"; box.style.color = "#111"; box.textContent = "Code indisponible. Partage ce lien : " + link; }
+  const sh = sheetEl(h("div", { style: "font-weight:600;text-align:center" }, title), box,
+    h("p", { class: "mut", style: "text-align:center;margin:0" }, hint),
+    h("button", { class: "btn alt", onclick: () => shareLink(link, title) }, "Partager le lien"),
+    h("button", { class: "btn", onclick: () => sh.remove() }, "Fermer"));
+}
+function proSell() {
+  const sh = sheetEl(h("div", { style: "font-size:20px;font-weight:600" }, "Vends avec Bomoko Pro"),
+    h("div", {}, "• Ta boutique en ligne avec ton catalogue (100 produits)"),
+    h("div", {}, "• Un lien et un code QR à partager partout"),
+    h("div", {}, "• Un panier et des commandes avec suivi (nouvelle, confirmée, prête, livrée)"),
+    h("div", { class: "mut" }, "• Bientôt : chaînes de diffusion, paiements par mobile money"),
+    h("div", { class: "mut", style: "margin-top:6px" }, "Le paiement de l’abonnement arrive bientôt. Pour l’activer maintenant, écris à " + LEGAL.contact + "."),
+    h("button", { class: "btn", onclick: () => sh.remove() }, "Fermer"));
+}
+
+// Liste et recherche des boutiques
+const shopRow = (s, back) => h("button", { class: "row", style: "padding:10px 0", onclick: () => shopView(s.slug, back) },
+  av(s.name, pubUrl(s.logo_path), 52),
+  h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, s.name), h("div", { class: "mut ell" }, [s.category, s.city].filter(Boolean).join(" · ") || "Boutique")),
+  h("div", { class: "mut", style: "font-size:12px" }, s.is_open ? "Ouvert" : "Fermé"));
+
+async function shopsView() {
+  stop();
+  const q = h("input", { class: "inp", type: "search", "aria-label": "Chercher une boutique", placeholder: "Chercher une boutique, une catégorie, une ville" });
+  const body = h("div", { class: "body pad" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" }, h("h1", { class: "logo" }, "Boutiques"),
+      me ? h("button", { class: "btn alt", style: "margin-left:auto;padding:0 8px", onclick: () => ordersView("buy") }, "Commandes") : null,
+      h("button", { class: "btn alt", style: "padding:0 8px", onclick: () => isPro() ? myShopView() : proSell() }, isPro() ? "Ma boutique" : "Vendre avec Pro")),
+    h("div", { class: "pad", style: "padding-bottom:0" }, q), body, tabs("b"));
+  const load = async () => {
+    const t = q.value.trim().replace(/[%,()*]/g, "");
+    let qq = sb.from("shops").select("id,owner_id,slug,name,category,city,description,hours,phone,currency,logo_path,is_open").order("created_at", { ascending: false }).limit(40);
+    if (t.length >= 2) qq = qq.or("name.ilike.*" + t + "*,category.ilike.*" + t + "*,city.ilike.*" + t + "*");
+    const { data, error } = await qq;
+    if (error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger les boutiques. Vérifie ta connexion.")); return; }
+    body.replaceChildren(...(data.length ? data.map(x => shopRow(x, shopsView)) : [h("p", { class: "mut" }, t.length >= 2 ? "Aucune boutique trouvée." : "Aucune boutique pour le moment. Les abonnés Bomoko Pro peuvent ouvrir la leur.")]));
+  };
+  let tm;
+  q.oninput = () => { clearTimeout(tm); tm = setTimeout(load, 300); };
+  load();
+}
+
+// Vitrine d'une boutique (visible aussi sans compte)
+async function shopView(slug, back) {
+  stop();
+  const goBack = back || (me ? shopsView : () => authView(false));
+  const body = h("div", { class: "body pad" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => goBack() }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, "Boutique")), body);
+  const { data: s, error } = await sb.from("shops").select("*").eq("slug", slug).maybeSingle();
+  if (error || !s) { body.replaceChildren(h("p", { class: "mut" }, error ? "Impossible de charger la boutique. Vérifie ta connexion." : "Cette boutique n’existe pas ou n’est plus disponible.")); return; }
+  const { data: prods } = await sb.from("products").select("*").eq("shop_id", s.id).order("created_at", { ascending: false });
+  const link = shopLink(s.slug), mine = !!me && s.owner_id === me.id;
+  const head = h("div", { style: "display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center" },
+    av(s.name, pubUrl(s.logo_path), 88),
+    h("div", { style: "font-size:22px;font-weight:600" }, s.name),
+    h("div", { class: "mut" }, [s.category, s.city].filter(Boolean).join(" · ")),
+    h("div", { style: "font-size:13px;padding:3px 10px;border-radius:12px;color:#fff;background:" + (s.is_open ? "#0F6B4F" : "#6B2A2A") }, s.is_open ? "Ouvert" : "Fermé"));
+  const info = [s.description && h("p", { style: "margin:0;line-height:1.5" }, s.description),
+    s.hours && h("div", { class: "mut" }, "Horaires : " + s.hours), s.phone && h("div", { class: "mut" }, "Téléphone : " + s.phone)].filter(Boolean);
+  const acts = h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" },
+    me && !mine ? h("button", { class: "btn", style: "flex:1", onclick: () => friendSheet(s.owner_id) }, "Écrire au vendeur") : null,
+    !me ? h("button", { class: "btn", style: "flex:1", onclick: () => { pendingShop = s.slug; authView(false); } }, "Se connecter pour écrire") : null,
+    h("button", { class: "btn alt", onclick: () => shareLink(link, s.name) }, "Partager"),
+    mine ? h("button", { class: "btn alt", onclick: myShopView }, "Gérer") : null);
+  // Panier (gardé sur le téléphone)
+  const cart = cartGet(s.id);
+  const canBuy = !mine && s.is_open;
+  const barBtn = h("button", { class: "btn", style: "flex:1" });
+  const bar = h("div", { class: "bar", style: "display:none" }, barBtn);
+  const upBar = () => {
+    const n = cartCount(cart);
+    bar.style.display = n ? "flex" : "none";
+    barBtn.textContent = "Voir le panier (" + n + ") · " + money((prods || []).reduce((a, p) => a + (cart[p.id] || 0) * Number(p.price), 0), s.currency);
+  };
+  barBtn.onclick = () => {
+    if (!me) { toast("Connecte-toi pour commander."); pendingShop = s.slug; authView(false); return; }
+    cartView(s, prods, back);
+  };
+  const qb = (t, fn) => h("button", { class: "btn alt", "aria-label": t === "+" ? "Ajouter un" : "Retirer un", style: "width:36px;height:36px;padding:0;font-size:20px;border:1px solid var(--in)", onclick: fn }, t);
+  const ctl = pr => {
+    const box = h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:6px" });
+    const set = n => { cart[pr.id] = Math.max(0, Math.min(99, n)); cartSave(s.id, cart); draw(); upBar(); };
+    const draw = () => {
+      const q = cart[pr.id] || 0;
+      box.replaceChildren(...(q ? [qb("−", () => set(q - 1)), h("span", { style: "min-width:24px;text-align:center;font-weight:600" }, String(q)), qb("+", () => set(q + 1))]
+        : [h("button", { class: "btn", style: "height:36px;padding:0 14px;font-size:14px", onclick: () => set(1) }, "Ajouter au panier")]));
+    };
+    draw();
+    return box;
+  };
+  const items = (prods || []).map(pr => h("div", { class: "row", style: "padding:10px 0;align-items:flex-start;opacity:" + (pr.available ? 1 : .55) },
+    thumbEl(pr, 84),
+    h("div", { class: "grow" }, h("div", { style: "font-weight:600" }, pr.name),
+      h("div", { style: "color:var(--gl);font-weight:600" }, money(pr.price, s.currency)),
+      pr.description && h("div", { class: "mut", style: "font-size:14px" }, pr.description),
+      !pr.available && h("div", { class: "mut", style: "font-size:13px" }, "Indisponible"),
+      canBuy && pr.available ? ctl(pr) : null)));
+  body.replaceChildren(head, ...info, acts,
+    h("div", { style: "font-weight:600;margin-top:8px" }, "Catalogue (" + items.length + ")"),
+    ...(items.length ? items : [h("p", { class: "mut" }, "Pas encore de produits.")]));
+  $.append(bar); upBar();
+}
+
+// ---------- Commandes : panier, commande et suivi ----------
+let newOrders = 0;
+const ORDER_ST = { new: "Nouvelle", confirmed: "Confirmée", ready: "Prête", delivered: "Livrée", cancelled: "Annulée" };
+const ORDER_COL = { new: "#F2A900", confirmed: "#2F5BD0", ready: "#7A4EAB", delivered: "#0F6B4F", cancelled: "#6B2A2A" };
+const ORDER_SEL = "id,code,status,total,currency,note,created_at,shop:shops(id,name,slug,owner_id,logo_path),buyer:profiles!buyer_id(id,display_name,avatar_url),items:order_items(name,price,qty)";
+const stChip = st => h("span", { style: "font-size:12px;padding:2px 8px;border-radius:10px;white-space:nowrap;color:" + (st === "new" ? "#1F1A14" : "#fff") + ";background:" + (ORDER_COL[st] || "#444") }, ORDER_ST[st] || st);
+const cartGet = sid => LS.get("cart:" + sid) || {};
+const cartSave = (sid, c) => { Object.keys(c).forEach(k => { if (!(c[k] > 0)) delete c[k]; }); LS.set("cart:" + sid, c); };
+const cartCount = c => Object.values(c).reduce((a, b) => a + b, 0);
+const fmtDay = d => new Date(d).toLocaleString("fr", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+async function myShopId() {
+  const { data } = await sb.from("shops").select("id").eq("owner_id", me.id).maybeSingle();
+  if (data && data.id) { LS.set("myshop", data.id); return data.id; }
+  return LS.get("myshop") || null;
+}
+async function refreshOrderBadge() {
+  if (!me || me.offline || !navigator.onLine) return;
+  try {
+    const sid = await myShopId();
+    if (!sid) return;
+    const { count } = await sb.from("orders").select("id", { count: "exact", head: true }).eq("shop_id", sid).eq("status", "new");
+    newOrders = count || 0;
+    const b = document.querySelector('.tabs [data-tab="b"]');
+    if (b) b.textContent = "Boutiques" + (newOrders ? " (" + newOrders + ")" : "");
+  } catch (e) {}
+}
+
+// Panier d'une boutique
+function cartView(s, prods, back) {
+  const cart = cartGet(s.id);
+  const list = (prods || []).filter(p => p.available && cart[p.id] > 0);
+  const note = h("textarea", { class: "inp", maxlength: 300, placeholder: "Message pour le vendeur (adresse, précisions…)", "aria-label": "Message pour le vendeur", style: "height:90px;padding:10px;resize:none" });
+  const totEl = h("div", { style: "font-weight:700;font-size:18px" });
+  const rows = h("div");
+  const draw = () => {
+    const live = list.filter(p => cart[p.id] > 0);
+    rows.replaceChildren(...(live.length ? live.map(p => h("div", { class: "row", style: "padding:8px 0" }, thumbEl(p, 56),
+      h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, p.name), h("div", { class: "mut" }, money(p.price, s.currency) + " × " + cart[p.id])),
+      h("button", { class: "btn alt", style: "padding:0 12px", "aria-label": "Retirer un", onclick: () => { cart[p.id]--; cartSave(s.id, cart); draw(); } }, "−"),
+      h("button", { class: "btn alt", style: "padding:0 12px", "aria-label": "Ajouter un", onclick: () => { cart[p.id] = Math.min(99, cart[p.id] + 1); cartSave(s.id, cart); draw(); } }, "+")))
+      : [h("p", { class: "mut" }, "Ton panier est vide.")]));
+    totEl.textContent = "Total : " + money(live.reduce((a, p) => a + cart[p.id] * Number(p.price), 0), s.currency);
+  };
+  const send = h("button", { class: "btn", style: "flex:1" }, "Envoyer la commande");
+  send.onclick = async () => {
+    const items = list.filter(p => cart[p.id] > 0).map(p => ({ product_id: p.id, qty: cart[p.id] }));
+    if (!items.length) return toast("Ton panier est vide.");
+    if (!navigator.onLine) return toast("Il faut du réseau pour envoyer la commande.");
+    send.disabled = true;
+    const { data, error } = await sb.rpc("place_order", { p_shop: s.id, p_items: items, p_note: note.value.trim() || null });
+    if (error) { send.disabled = false; return toast(netErr(error) ? "Réseau indisponible. Réessaie." : (error.message || "Commande impossible.")); }
+    LS.set("cart:" + s.id, {});
+    orderDetail(data, "buy");
+    toast("Commande envoyée au vendeur.");
+  };
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => shopView(s.slug, back) }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, "Panier · " + s.name)),
+    h("div", { class: "body pad" }, rows, note, totEl,
+      h("div", { class: "mut", style: "font-size:13px" }, "Le paiement et la livraison se règlent directement avec le vendeur.")),
+    h("div", { class: "bar" }, send));
+  draw();
+}
+
+// Liste des commandes : « buy » = mes commandes, « sell » = commandes reçues
+async function ordersView(mode) {
+  stop();
+  const sell = mode === "sell";
+  const body = h("div", { class: "body pad" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: sell ? myShopView : shopsView }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, sell ? "Commandes reçues" : "Mes commandes")), body, tabs("b"));
+  let q = sb.from("orders").select(ORDER_SEL).order("created_at", { ascending: false }).limit(60);
+  if (sell) {
+    const sid = await myShopId();
+    if (!sid) { body.replaceChildren(h("p", { class: "mut" }, "Tu n’as pas encore de boutique.")); return; }
+    q = q.eq("shop_id", sid);
+  } else q = q.eq("buyer_id", me.id);
+  const { data, error } = await q;
+  if (error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger les commandes. Vérifie ta connexion.")); return; }
+  if (sell) { newOrders = data.filter(o => o.status === "new").length; }
+  body.replaceChildren(...(data.length ? data.map(o => {
+    const who = sell ? o.buyer : o.shop;
+    return h("button", { class: "row", style: "padding:10px 0", onclick: () => orderDetail(o.id, mode) },
+      av(who ? (who.display_name || who.name) : "?", who ? (sell ? who.avatar_url : pubUrl(who.logo_path)) : null, 46),
+      h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, who ? (who.display_name || who.name) : "Boutique"),
+        h("div", { class: "mut ell" }, "#" + o.code + " · " + money(o.total, o.currency) + " · " + fmtDay(o.created_at))),
+      stChip(o.status));
+  }) : [h("p", { class: "mut" }, sell ? "Aucune commande pour le moment." : "Tu n’as pas encore passé de commande. Ouvre une boutique pour commencer.")]));
+}
+
+// Détail d'une commande
+async function orderDetail(id, mode) {
+  stop();
+  const sell = mode === "sell";
+  const body = h("div", { class: "body pad" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => ordersView(mode) }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, "Commande")), body, tabs("b"));
+  const { data: o, error } = await sb.from("orders").select(ORDER_SEL).eq("id", id).maybeSingle();
+  if (error || !o) { body.replaceChildren(h("p", { class: "mut" }, error ? "Impossible de charger la commande. Vérifie ta connexion." : "Commande introuvable.")); return; }
+  const other = sell ? o.buyer : (o.shop ? { id: o.shop.owner_id, display_name: o.shop.name, avatar_url: pubUrl(o.shop.logo_path) } : null);
+  const setSt = async next => {
+    const { error: e } = await sb.from("orders").update({ status: next }).eq("id", o.id);
+    if (e) return toast(netErr(e) ? "Réseau indisponible. Réessaie." : (e.message || "Action impossible."));
+    toast("Statut mis à jour.");
+    orderDetail(o.id, mode);
+  };
+  const acts = [];
+  if (sell) {
+    if (o.status === "new") acts.push(h("button", { class: "btn", onclick: () => setSt("confirmed") }, "Confirmer la commande"));
+    if (o.status === "confirmed") acts.push(h("button", { class: "btn", onclick: () => setSt("ready") }, "Marquer comme prête"));
+    if (o.status === "ready") acts.push(h("button", { class: "btn", onclick: () => setSt("delivered") }, "Marquer comme livrée"));
+    if (["new", "confirmed", "ready"].includes(o.status)) acts.push(h("button", { class: "btn alt", onclick: () => { if (confirm(o.status === "new" ? "Refuser cette commande ?" : "Annuler cette commande ?")) setSt("cancelled"); } }, o.status === "new" ? "Refuser" : "Annuler la commande"));
+  } else if (o.status === "new") acts.push(h("button", { class: "btn alt", onclick: () => { if (confirm("Annuler ta commande ?")) setSt("cancelled"); } }, "Annuler ma commande"));
+  body.replaceChildren(
+    h("div", { style: "display:flex;align-items:center;gap:10px" }, h("div", { style: "font-size:20px;font-weight:600;flex:1" }, "Commande #" + o.code), stChip(o.status)),
+    h("div", { class: "mut" }, fmtDay(o.created_at)),
+    other ? h("div", { class: "row", style: "padding:8px 0" }, av(other.display_name, other.avatar_url, 46),
+      h("div", { class: "grow" }, h("div", { class: "mut", style: "font-size:13px" }, sell ? "Acheteur" : "Boutique"), h("div", { class: "ell", style: "font-weight:600" }, other.display_name))) : null,
+    ...(o.items || []).map(it => h("div", { style: "display:flex;gap:10px" }, h("div", { style: "flex:1" }, it.name + " × " + it.qty), h("div", { class: "mut" }, money(it.price * it.qty, o.currency)))),
+    h("div", { style: "font-weight:700;font-size:18px;border-top:1px solid var(--line);padding-top:8px" }, "Total : " + money(o.total, o.currency)),
+    o.note ? h("div", {}, h("div", { class: "mut", style: "font-size:13px" }, "Message de l’acheteur"), h("div", { style: "white-space:pre-wrap" }, o.note)) : null,
+    ...acts,
+    other && me && other.id !== me.id ? h("button", { class: "btn alt", onclick: () => friendSheet(other.id) }, sell ? "Écrire à l’acheteur" : "Écrire au vendeur") : null,
+    h("div", { class: "mut", style: "font-size:13px" }, "Le paiement et la livraison se règlent directement entre l’acheteur et le vendeur."));
+}
+
+// Ma boutique (abonnés Pro)
+async function myShopView() {
+  stop();
+  const body = h("div", { class: "body pad" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: shopsView }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, "Ma boutique")), body, tabs("b"));
+  if (!isPro()) { body.replaceChildren(h("p", { class: "mut" }, "Bomoko Pro n’est pas actif sur ton compte."), h("button", { class: "btn", onclick: proSell }, "Découvrir Bomoko Pro")); return; }
+  const { data: s, error } = await sb.from("shops").select("*").eq("owner_id", me.id).maybeSingle();
+  if (error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger ta boutique. Vérifie ta connexion.")); return; }
+  const els = [];
+  if (s) {
+    const link = shopLink(s.slug);
+    const open = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:var(--g)" });
+    open.checked = s.is_open;
+    open.onchange = async () => {
+      const { error: e } = await sb.from("shops").update({ is_open: open.checked }).eq("id", s.id);
+      if (e) { open.checked = !open.checked; toast("Action impossible."); } else toast(open.checked ? "Boutique ouverte." : "Boutique fermée.");
+    };
+    const box = h("div", { style: "display:flex;flex-direction:column;gap:8px" });
+    els.push(h("button", { class: "btn", onclick: () => ordersView("sell") }, "Commandes reçues" + (newOrders ? " (" + newOrders + ")" : "")),
+      h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px" }, open, "Boutique ouverte"),
+      h("div", { class: "mut", style: "word-break:break-all;font-size:13px" }, link),
+      h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" },
+        h("button", { class: "btn", style: "flex:1", onclick: () => shareLink(link, s.name) }, "Partager"),
+        h("button", { class: "btn alt", onclick: () => qrSheet(link, s.name, "Fais scanner ce code pour ouvrir ta boutique.") }, "Code QR"),
+        h("button", { class: "btn alt", onclick: () => shopView(s.slug, myShopView) }, "Voir")),
+      box, h("div", { style: "font-weight:600;margin-top:10px" }, "Informations de la boutique"));
+    productsPanel(s, box);
+  } else els.push(h("p", { class: "mut", style: "margin:0" }, "Crée ta boutique : elle sera visible par tout le monde, même sans compte Bomoko."));
+  els.push(...shopForm(s));
+  body.replaceChildren(...els);
+}
+
+function shopForm(s) {
+  const name = h("input", { class: "inp", maxlength: 60, value: s ? s.name : "", placeholder: "Nom de la boutique" });
+  const cat = h("select", { class: "inp", "aria-label": "Catégorie" }, SHOP_CATS.map(c => h("option", { value: c }, c)));
+  if (s && s.category) cat.value = s.category;
+  const city = h("input", { class: "inp", maxlength: 60, value: s ? (s.city || "") : "", placeholder: "Ex. : Kinshasa" });
+  const desc = h("textarea", { class: "inp", maxlength: 500, style: "height:100px;padding:10px;resize:none", placeholder: "Présente ta boutique en quelques lignes" });
+  desc.value = s ? (s.description || "") : "";
+  const hours = h("input", { class: "inp", maxlength: 120, value: s ? (s.hours || "") : "", placeholder: "Ex. : Lun–Sam, 8 h–18 h" });
+  const phone = h("input", { class: "inp", type: "tel", maxlength: 30, value: s ? (s.phone || "") : "", placeholder: "Ex. : +243 …" });
+  const cur = h("select", { class: "inp", "aria-label": "Monnaie" }, [["USD", "Dollars ($)"], ["CDF", "Francs congolais (FC)"]].map(o => h("option", { value: o[0] }, o[1])));
+  if (s) { cur.value = s.currency; cur.disabled = true; }
+  const logo = h("input", { type: "file", accept: "image/*", style: "display:none" });
+  const logoTxt = h("div", { class: "mut" }, s && s.logo_path ? "Logo enregistré" : "Pas de logo");
+  let logoBlob = null;
+  logo.onchange = async () => { if (logo.files[0]) { logoBlob = await shrink(logo.files[0]); logoTxt.textContent = "Logo choisi : " + logo.files[0].name; } };
+  const save = h("button", { class: "btn" }, s ? "Enregistrer" : "Créer ma boutique");
+  save.onclick = async () => {
+    const nm = name.value.trim();
+    if (nm.length < 2) return toast("Donne un nom à ta boutique.");
+    save.disabled = true;
+    try {
+      let logo_path = s ? s.logo_path : null;
+      if (logoBlob) {
+        const path = me.id + "/" + crypto.randomUUID() + ".jpg";
+        const up = await sb.storage.from("shop-media").upload(path, logoBlob, { contentType: "image/jpeg" });
+        if (up.error) throw up.error;
+        if (logo_path) sb.storage.from("shop-media").remove([logo_path]);
+        logo_path = path;
+      }
+      const row = { name: nm, category: cat.value, city: city.value.trim() || null, description: desc.value.trim() || null, hours: hours.value.trim() || null, phone: phone.value.trim() || null, logo_path };
+      if (s) { const { error } = await sb.from("shops").update(row).eq("id", s.id); if (error) throw error; }
+      else {
+        let base = slugify(nm) || "boutique";
+        if (base.length < 3) base += "-shop";
+        let ok = false;
+        for (let i = 0; i < 5 && !ok; i++) {
+          const slug = i ? base.slice(0, 26) + "-" + Math.floor(100 + Math.random() * 900) : base;
+          const r = await sb.from("shops").insert({ ...row, owner_id: me.id, slug, currency: cur.value });
+          if (!r.error) ok = true;
+          else if (!/duplicate|unique|23505/i.test((r.error.message || "") + (r.error.code || ""))) throw r.error;
+        }
+        if (!ok) throw new Error("adresse");
+      }
+      toast(s ? "Boutique enregistrée." : "Boutique créée.");
+      myShopView();
+    } catch (e) { save.disabled = false; toast("Enregistrement impossible. Vérifie ton réseau et que Bomoko Pro est actif."); }
+  };
+  return [h("label", {}, "Nom", name), h("label", {}, "Catégorie", cat), h("label", {}, "Ville", city), h("label", {}, "Description", desc),
+    h("label", {}, "Horaires", hours), h("label", {}, "Téléphone (facultatif, public)", phone),
+    h("label", {}, s ? "Monnaie (non modifiable)" : "Monnaie des prix", cur),
+    h("div", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn alt", onclick: () => logo.click() }, "Logo"), logoTxt), logo, save];
+}
+
+async function productsPanel(s, box) {
+  const { data, error } = await sb.from("products").select("*").eq("shop_id", s.id).order("created_at", { ascending: false });
+  if (error) { box.replaceChildren(h("p", { class: "err" }, "Impossible de charger le catalogue.")); return; }
+  const list = data || [], refresh = () => productsPanel(s, box);
+  box.replaceChildren(
+    h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:6px" },
+      h("div", { style: "font-weight:600;flex:1" }, "Catalogue (" + list.length + "/100)"),
+      h("button", { class: "btn", style: "height:38px;padding:0 12px;font-size:14px", onclick: () => productForm(s, null, refresh) }, "Ajouter")),
+    ...(list.length ? list.map(pr => h("button", { class: "row", style: "padding:8px 0;opacity:" + (pr.available ? 1 : .55), onclick: () => productForm(s, pr, refresh) },
+      thumbEl(pr), h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, pr.name),
+        h("div", { class: "mut" }, money(pr.price, s.currency) + (pr.available ? "" : " · indisponible")))))
+      : [h("p", { class: "mut" }, "Ajoute ton premier produit avec un nom, un prix et une photo.")]));
+}
+
+function productForm(s, pr, done) {
+  const name = h("input", { class: "inp", maxlength: 80, value: pr ? pr.name : "", placeholder: "Ex. : Sac en cuir" });
+  const price = h("input", { class: "inp", inputmode: "decimal", value: pr ? String(pr.price) : "", placeholder: "Ex. : 25" });
+  const desc = h("textarea", { class: "inp", maxlength: 500, style: "height:80px;padding:10px;resize:none", placeholder: "Description (facultatif)" });
+  desc.value = pr ? (pr.description || "") : "";
+  const avail = h("input", { type: "checkbox", style: "width:22px;height:22px;accent-color:var(--g)" });
+  avail.checked = pr ? pr.available : true;
+  const file = h("input", { type: "file", accept: "image/*", style: "display:none" });
+  const pic = h("div", { class: "mut" }, pr && pr.photo_path ? "Photo enregistrée" : "Aucune photo");
+  file.onchange = () => { if (file.files[0]) pic.textContent = "Photo choisie : " + file.files[0].name; };
+  const save = h("button", { class: "btn", style: "flex:1" }, pr ? "Enregistrer" : "Ajouter");
+  const del = pr ? h("button", { class: "btn alt", style: "color:#FF8A80", onclick: async () => {
+    if (!confirm("Supprimer ce produit ?")) return;
+    const { error } = await sb.from("products").delete().eq("id", pr.id);
+    if (error) return toast("Suppression impossible.");
+    if (pr.photo_path) sb.storage.from("shop-media").remove([pr.photo_path]);
+    sh.remove(); done();
+  } }, "Supprimer") : null;
+  const sh = sheetEl(h("div", { style: "font-weight:600;font-size:18px" }, pr ? "Modifier le produit" : "Nouveau produit"),
+    h("label", {}, "Nom", name), h("label", {}, "Prix (" + (s.currency === "CDF" ? "FC" : "$") + ")", price), h("label", {}, "Description", desc),
+    h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px" }, avail, "Disponible"),
+    h("div", { style: "display:flex;gap:10px;align-items:center" }, h("button", { class: "btn alt", onclick: () => file.click() }, "Photo"), pic), file,
+    h("div", { style: "display:flex;gap:10px" }, del, save));
+  save.onclick = async () => {
+    const nm = name.value.trim(), pc = parseFloat(price.value.replace(",", "."));
+    if (!nm) return toast("Donne un nom au produit.");
+    if (!(pc >= 0)) return toast("Indique un prix valide.");
+    save.disabled = true;
+    try {
+      let photo_path = pr ? pr.photo_path : null;
+      if (file.files[0]) {
+        const blob = await fit(file.files[0], 900), path = me.id + "/" + crypto.randomUUID() + ".jpg";
+        const up = await sb.storage.from("shop-media").upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) throw up.error;
+        if (photo_path) sb.storage.from("shop-media").remove([photo_path]);
+        photo_path = path;
+      }
+      const row = { name: nm, description: desc.value.trim() || null, price: pc, photo_path, available: avail.checked };
+      const r = pr ? await sb.from("products").update(row).eq("id", pr.id) : await sb.from("products").insert({ ...row, shop_id: s.id });
+      if (r.error) throw r.error;
+      sh.remove(); done();
+    } catch (e) { save.disabled = false; toast("Enregistrement impossible (réseau ou limite de 100 produits)."); }
+  };
+}
+
 // ---------- Installation sur l'écran d'accueil ----------
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
@@ -1402,7 +1824,9 @@ sb.auth.onAuthStateChange((ev, s) => {
       if (!me) { me = { id: u.id, offline: true }; profile = LS.get("profile") || { display_name: "" }; applyTheme(); listView(); }
       return;
     }
-    me = null; profile = null; authView(); return;
+    me = null; profile = null;
+    if (pendingShop) { shopView(pendingShop, () => authView(false)); return; }
+    authView(); return;
   }
   if (!me || me.offline) { me = s.user; setTimeout(start, 0); }
 });
