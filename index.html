@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-16b">
+<meta name="app-version" content="2026-11-16c">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <link rel="manifest" href="manifest.webmanifest">
@@ -1685,9 +1685,15 @@ async function myShopView() {
       if (e) { open.checked = !open.checked; toast("Action impossible."); } else toast(open.checked ? "Boutique ouverte." : "Boutique fermée.");
     };
     const box = h("div", { style: "display:flex;flex-direction:column;gap:8px" });
-    els.push(h("div", { style: "display:flex;align-items:center;gap:12px" }, av(s.name, pubUrl(s.logo_path), 64),
-      h("div", { style: "min-width:0" }, h("div", { class: "ell", style: "font-weight:600;font-size:18px" }, s.name),
-        h("div", { class: "mut ell" }, [s.category, s.city].filter(Boolean).join(" · ") || " "))));
+    const lg = h("input", { type: "file", accept: "image/*", style: "display:none" });
+    lg.onchange = async () => { const f = lg.files[0]; if (f && await changeShopLogo(s, f)) myShopView(); };
+    els.push(h("div", { style: "display:flex;align-items:center;gap:12px" },
+      h("button", { "aria-label": "Changer la photo de la boutique", style: "border:0;background:none;padding:0;flex:none", onclick: () => lg.click() }, av(s.name, pubUrl(s.logo_path), 64)),
+      h("div", { style: "min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:2px" },
+        h("div", { class: "ell", style: "font-weight:600;font-size:18px;max-width:100%" }, s.name),
+        h("div", { class: "mut ell", style: "max-width:100%" }, [s.category, s.city].filter(Boolean).join(" · ") || " "),
+        h("button", { class: "btn alt", style: "height:30px;padding:0;font-size:14px", onclick: () => lg.click() }, "Changer la photo")),
+      lg));
     els.push(h("button", { class: "btn", onclick: () => ordersView("sell") }, "Commandes reçues" + (newOrders ? " (" + newOrders + ")" : "")),
       h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px" }, open, "Boutique ouverte"),
       h("div", { class: "mut", style: "word-break:break-all;font-size:13px" }, link),
@@ -1700,6 +1706,24 @@ async function myShopView() {
   } else els.push(h("p", { class: "mut", style: "margin:0" }, "Crée ta boutique : elle sera visible par tout le monde, même sans compte Bomoko."));
   els.push(...shopForm(s));
   body.replaceChildren(...els);
+}
+
+// Change la photo (logo) d'une boutique existante : choisie dans la galerie, enregistrée tout de suite
+async function changeShopLogo(s, file) {
+  try {
+    const blob = await shrink(file);
+    const path = me.id + "/" + crypto.randomUUID() + ".jpg";
+    const up = await sb.storage.from("shop-media").upload(path, blob, { contentType: "image/jpeg" });
+    if (up.error) throw up.error;
+    const { error } = await sb.from("shops").update({ logo_path: path }).eq("id", s.id);
+    if (error) throw error;
+    if (s.logo_path) sb.storage.from("shop-media").remove([s.logo_path]);
+    toast("Photo de la boutique changée.");
+    return path;
+  } catch (e) {
+    toast("Changement impossible. Vérifie ton réseau et que Bomoko Pro est actif.");
+    return null;
+  }
 }
 
 function shopForm(s) {
@@ -1720,6 +1744,11 @@ function shopForm(s) {
   logo.onchange = async () => {
     const f = logo.files[0];
     if (!f) return;
+    if (s) {
+      const np = await changeShopLogo(s, f);
+      if (np) { s.logo_path = np; logoPrev.replaceChildren(av(s.name, pubUrl(np), 72)); logoTxt.textContent = "Photo enregistrée."; }
+      return;
+    }
     try {
       logoBlob = await shrink(f);
       logoPrev.replaceChildren(av(name.value || "?", URL.createObjectURL(logoBlob), 72));
