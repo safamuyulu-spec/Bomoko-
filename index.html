@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-17a">
+<meta name="app-version" content="2026-11-17b">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -1423,6 +1423,11 @@ const SHOP_CATS = ["Alimentation", "Mode et beauté", "Électronique", "Maison",
 const money = (v, cur) => cur === "CDF" ? Math.round(v).toLocaleString("fr") + " FC" : Number(v).toLocaleString("fr", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " $";
 const slugify = t => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
 const shopLink = slug => location.origin + location.pathname + "?shop=" + slug;
+// Adresse du service d'aperçu des liens (Cloudflare Worker). Quand elle est renseignée,
+// les liens partagés sur Facebook, WhatsApp, etc. affichent la photo de la boutique ou du produit.
+const SHARE_BASE = "https://bomoko-partage.safamuyulu.workers.dev";
+const shopShare = slug => SHARE_BASE ? SHARE_BASE + "/s/" + slug : shopLink(slug);
+const prodShare = (s, pr) => SHARE_BASE ? SHARE_BASE + "/p/" + pr.id : shopLink(s.slug);
 const pubUrl = path => path ? sb.storage.from("shop-media").getPublicUrl(path).data.publicUrl : null;
 const thumbEl = (p, z = 56) => p.photo_path
   ? h("img", { src: pubUrl(p.photo_path), alt: p.name || "", loading: "lazy", style: "width:" + z + "px;height:" + z + "px;object-fit:cover;border-radius:10px;flex:none;background:#222" })
@@ -1435,7 +1440,7 @@ async function shareLink(link, title) {
 }
 // Partage d'un produit avec sa photo (feuille de partage du téléphone : Facebook, WhatsApp, etc.)
 async function shareProduct(s, pr) {
-  const link = shopLink(s.slug);
+  const link = prodShare(s, pr);
   const text = pr.name + " – " + money(pr.price, s.currency) + "\n" + (pr.description ? pr.description + "\n" : "") + s.name + " sur Bomoko : " + link;
   try {
     if (pr.photo_path && navigator.canShare) {
@@ -1450,11 +1455,11 @@ async function shareProduct(s, pr) {
   try { await navigator.clipboard.writeText(text); toast("Texte copié. Ajoute la photo toi-même."); } catch (e) { toast("Partage impossible sur ce téléphone."); }
 }
 function productShareSheet(s, pr) {
-  const link = shopLink(s.slug);
+  const link = prodShare(s, pr);
   const sh = sheetEl(h("div", { style: "font-weight:600" }, pr.name),
     h("button", { class: "btn", onclick: () => { sh.remove(); shareProduct(s, pr); } }, pr.photo_path ? "Partager avec la photo" : "Partager"),
-    h("button", { class: "btn alt", onclick: () => { sh.remove(); shareLink(link, s.name); } }, "Partager le lien de la boutique"),
-    h("button", { class: "btn alt", onclick: async () => { sh.remove(); try { await navigator.clipboard.writeText(link); toast("Lien copié."); } catch (e) { toast(link); } } }, "Copier le lien"),
+    h("button", { class: "btn alt", onclick: () => { sh.remove(); shareLink(shopShare(s.slug), s.name); } }, "Partager le lien de la boutique"),
+    h("button", { class: "btn alt", onclick: async () => { sh.remove(); try { await navigator.clipboard.writeText(link); toast("Lien du produit copié."); } catch (e) { toast(link); } } }, "Copier le lien du produit"),
     h("button", { class: "btn alt", onclick: () => sh.remove() }, "Fermer"));
 }
 function qrSheet(link, title, hint) {
@@ -1525,7 +1530,7 @@ async function shopView(slug, back) {
   const acts = h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" },
     me && !mine ? h("button", { class: "btn", style: "flex:1", onclick: () => friendSheet(s.owner_id) }, "Écrire au vendeur") : null,
     !me ? h("button", { class: "btn", style: "flex:1", onclick: () => { pendingShop = s.slug; authView(false); } }, "Se connecter pour écrire") : null,
-    h("button", { class: "btn alt", onclick: () => shareLink(link, s.name) }, "Partager"),
+    h("button", { class: "btn alt", onclick: () => shareLink(shopShare(s.slug), s.name) }, "Partager"),
     mine ? h("button", { class: "btn alt", onclick: myShopView }, "Gérer") : null);
   // Panier (gardé sur le téléphone)
   const cart = cartGet(s.id);
@@ -1729,7 +1734,7 @@ async function myShopView() {
       h("label", { style: "flex-direction:row;align-items:center;gap:10px;font-weight:400;font-size:16px" }, open, "Boutique ouverte"),
       h("div", { class: "mut", style: "word-break:break-all;font-size:13px" }, link),
       h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" },
-        h("button", { class: "btn", style: "flex:1", onclick: () => shareLink(link, s.name) }, "Partager"),
+        h("button", { class: "btn", style: "flex:1", onclick: () => shareLink(shopShare(s.slug), s.name) }, "Partager"),
         h("button", { class: "btn alt", onclick: () => qrSheet(link, s.name, "Fais scanner ce code pour ouvrir ta boutique.") }, "Code QR"),
         h("button", { class: "btn alt", onclick: () => shopView(s.slug, myShopView) }, "Voir")),
       box, h("div", { style: "font-weight:600;margin-top:10px" }, "Informations de la boutique"));
