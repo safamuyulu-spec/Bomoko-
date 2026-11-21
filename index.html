@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-17c">
+<meta name="app-version" content="2026-11-18a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -87,6 +87,11 @@ textarea{font:inherit}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script>
 const $ = document.getElementById("app");
+{ // Après une connexion Google, on retrouve le lien d'origine (boutique, code QR)
+  const q = sessionStorage.getItem("bk-q");
+  sessionStorage.removeItem("bk-q");
+  if (q && !location.search) history.replaceState(null, "", location.pathname + q);
+}
 if (!window.supabase) {
   $.textContent = "Impossible de charger Bomoko. Vérifie ta connexion internet puis recharge la page.";
   throw new Error("supabase-js non chargé");
@@ -205,6 +210,7 @@ const fr = m =>
   /already registered/i.test(m) ? "Cet e-mail a déjà un compte." :
   /at least 6/i.test(m) ? "Mot de passe : 6 caractères minimum." :
   /valid email|invalid.*email/i.test(m) ? "Adresse e-mail invalide." :
+  /not confirmed/i.test(m) ? "Confirme d’abord ton adresse e-mail : ouvre le message que nous t’avons envoyé (regarde aussi les courriers indésirables)." :
   /rate limit/i.test(m) ? "Trop d’essais. Attends un moment." :
   "Action impossible. Vérifie ta connexion internet.";
 
@@ -215,6 +221,8 @@ const tabs = on => h("nav", { class: "tabs" },
   h("button", { class: on === "p" ? "on" : "", onclick: profView }, "Profil"));
 
 // ---------- Connexion ----------
+// Passe à true quand la connexion avec Apple (iCloud) est configurée dans Supabase
+const APPLE_LOGIN = false;
 function authView(signup = false) {
   stop();
   const em = h("input", { class: "inp", type: "email", autocomplete: "email" });
@@ -222,23 +230,42 @@ function authView(signup = false) {
   const nm = h("input", { class: "inp", type: "text", autocomplete: "name", maxlength: 40 });
   const err = h("div", { class: "err", role: "alert" });
   const go = h("button", { class: "btn" }, signup ? "Créer mon compte" : "Se connecter");
+  const back = location.origin + location.pathname;
+  const resend = h("button", { class: "btn alt", style: "display:none;height:40px;font-size:14px" }, "Renvoyer l’e-mail de confirmation");
+  resend.onclick = async () => {
+    resend.disabled = true;
+    const { error } = await sb.auth.resend({ type: "signup", email: em.value.trim(), options: { emailRedirectTo: back } });
+    toast(error ? fr(error.message) : "E-mail renvoyé. Regarde aussi les courriers indésirables.");
+    setTimeout(() => { resend.disabled = false; }, 60000);
+  };
   go.onclick = async () => {
-    err.textContent = ""; go.disabled = true;
+    err.textContent = ""; go.disabled = true; resend.style.display = "none";
     const e = em.value.trim(), p = pw.value;
     const r = signup
-      ? await sb.auth.signUp({ email: e, password: p, options: { data: { display_name: nm.value.trim() || "Nouvel utilisateur" } } })
+      ? await sb.auth.signUp({ email: e, password: p, options: { emailRedirectTo: back, data: { display_name: nm.value.trim() || "Nouvel utilisateur" } } })
       : await sb.auth.signInWithPassword({ email: e, password: p });
     go.disabled = false;
-    if (r.error) err.textContent = fr(r.error.message);
-    else if (signup && !r.data.session) err.textContent = "Compte créé. Confirme ton e-mail, puis connecte-toi.";
+    if (r.error) { err.textContent = fr(r.error.message); if (/not confirmed/i.test(r.error.message)) resend.style.display = "block"; }
+    else if (signup && !r.data.session) { err.textContent = "Compte créé. Un e-mail de confirmation vient d’être envoyé à " + e + ". Ouvre-le (regarde aussi les courriers indésirables), puis connecte-toi."; resend.style.display = "block"; }
   };
+  const oauth = async provider => {
+    err.textContent = "";
+    sessionStorage.setItem("bk-q", location.search);
+    const { error } = await sb.auth.signInWithOAuth({ provider, options: { redirectTo: back } });
+    if (error) { sessionStorage.removeItem("bk-q"); err.textContent = "La connexion avec " + (provider === "google" ? "Google" : "Apple") + " n’est pas disponible pour le moment."; }
+  };
+  const social = [h("button", { class: "btn alt", style: "border:1px solid var(--in);color:var(--ink)", onclick: () => oauth("google") },
+    h("span", { style: "font-weight:700;margin-right:8px;color:#4285F4" }, "G"), "Continuer avec Google")];
+  if (APPLE_LOGIN) social.push(h("button", { class: "btn alt", style: "border:1px solid var(--in);color:var(--ink)", onclick: () => oauth("apple") }, "Continuer avec Apple"));
   show(h("div", { class: "body pad auth" },
     h("h1", { class: "logo big" }, "Bomoko"),
     h("p", { class: "mut" }, "Discute avec tes proches et crée des groupes, simplement."),
     signup && h("label", {}, "Ton nom", nm),
     h("label", {}, "E-mail", em),
     h("label", {}, "Mot de passe", pw),
-    err, go,
+    err, go, resend,
+    h("div", { class: "mut", style: "text-align:center;font-size:13px" }, "ou"),
+    ...social,
     h("button", { class: "btn alt", onclick: () => authView(!signup) }, signup ? "J’ai déjà un compte" : "Créer un compte"),
     h("div", { style: "display:flex;gap:14px;justify-content:center;flex-wrap:wrap;font-size:13px" },
       ...[["help", "Aide"], ["privacy", "Confidentialité"], ["terms", "Conditions"]].map(([k, t]) =>
@@ -1295,7 +1322,7 @@ const LEGAL = { editeur: "SMP AI, représentée par Ilela Peter", contact: "bomo
 const PAGES = {
   help: { t: "Aide", s: [
     ["Premiers pas", [
-      "• Crée ton compte avec ton nom, ton adresse e-mail et un mot de passe (6 caractères minimum).",
+      "• Crée ton compte avec ton nom, ton adresse e-mail et un mot de passe (6 caractères minimum), ou continue avec Google. Après une inscription par e-mail, ouvre le message de confirmation que tu reçois (regarde aussi les courriers indésirables).",
       "• Pour discuter avec quelqu’un, envoie-lui une demande d’ami depuis la page Amis (bouton « Amis » ou « + »). Vous pouvez discuter dès qu’il l’a acceptée.",
       "• Tu peux aussi montrer ton code QR (Profil, puis « Mon code QR ») ou scanner celui d’un ami (page Amis, bouton « Scanner »)."]],
     ["Discussions", [
@@ -1340,6 +1367,7 @@ const PAGES = {
     ["Qui sommes-nous", ["Bomoko est une application de messagerie éditée par {editeur}. Contact : {contact}. Dernière mise à jour : {maj}."]],
     ["Les données que nous traitons", [
       "• Compte : adresse e-mail, mot de passe (il est protégé par le service de connexion et nous ne pouvons pas le lire) et nom affiché.",
+      "• Si tu te connectes avec Google, nous recevons ton adresse e-mail, ton nom et ta photo de profil Google. Nous ne recevons pas ton mot de passe Google.",
       "• Profil : photo, statut, thème et réglages (par exemple la confirmation de lecture).",
       "• Contenus : messages, messages vocaux, photos, vidéos, audios, documents, contacts partagés et statuts.",
       "• Appels : qui appelle qui, quand, le type (audio ou vidéo) et l’état de l’appel. Le contenu des appels n’est pas enregistré.",
@@ -1357,7 +1385,7 @@ const PAGES = {
       "• Tes statuts : les personnes que tu as choisies au moment de publier.",
       "• Le badge de certification est public."]],
     ["Nos prestataires", [
-      "Bomoko fait appel à : Supabase (comptes, base de données et stockage des fichiers), Agora (transmission des appels audio et vidéo), GitHub Pages (hébergement de l’application) et Google Fonts (polices de caractères). Ils traitent des données pour faire fonctionner le service."]],
+      "Bomoko fait appel à : Supabase (comptes, base de données et stockage des fichiers), Agora (transmission des appels audio et vidéo), GitHub Pages (hébergement de l’application), Google (connexion avec Google, si tu la choisis) et Google Fonts (polices de caractères). Ils traitent des données pour faire fonctionner le service."]],
     ["Sécurité", [
       "Les échanges sont chiffrés (HTTPS) et les fichiers sont stockés dans un espace privé. Attention : les messages ne sont pas chiffrés de bout en bout. Techniquement, l’administrateur du service peut y accéder ; nous nous engageons à ne pas les consulter, sauf en cas d’obligation légale, de signalement d’abus ou d’incident de sécurité.",
       "Si tu découvres une faille de sécurité, écris-nous à {contact} avant de la rendre publique."]],
