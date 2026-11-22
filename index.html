@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-18a">
+<meta name="app-version" content="2026-11-18c">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -68,6 +68,13 @@ textarea{font:inherit}
 :root[data-theme="minuit"]{--bg:#05070F;--bar:#0D1220;--line:#1F2740;--bub:#18203A;--in:#4A5578;--g:#2F5BD3;--gl:#8FB0FF;--ink:#EAF0FF;--mut:#9AA6C4}
 :root[data-theme="foret"]{--bg:#030A06;--bar:#0B1812;--line:#1B3023;--bub:#14261C;--in:#46634F;--g:#0F6B4F;--gl:#5FE0B0;--ink:#EDF7F0;--mut:#9DB3A5}
 :root[data-theme="prune"]{--bg:#0A050E;--bar:#160D1C;--line:#2E1D3A;--bub:#241631;--in:#6A4E80;--g:#7A3FB0;--gl:#D3A5FF;--ink:#F5EDFB;--mut:#B3A2C2}
+/* Nouveaux thèmes */
+:root[data-theme="orage"]{--bg:#07090C;--bar:#11161C;--line:#222B35;--bub:#1B232C;--in:#56657A;--g:#4A6785;--gl:#9CB8D6;--ink:#EAF0F6;--mut:#9AA8B8}
+:root[data-theme="orange"]{--bg:#0D0702;--bar:#1A0F06;--line:#36210F;--bub:#2A190B;--in:#7A5430;--g:#B45309;--gl:#FFA94D;--ink:#FFF3E8;--mut:#C4A88C}
+:root[data-theme="rose"]{--bg:#100409;--bar:#1E0C14;--line:#3D1A28;--bub:#2F1320;--in:#8A4A63;--g:#BE185D;--gl:#FF8FC0;--ink:#FFEFF6;--mut:#CBA0B4}
+:root[data-theme="rouge"]{--bg:#0D0303;--bar:#1B0808;--line:#3A1414;--bub:#2A0F0F;--in:#7F3A3A;--g:#B91C1C;--gl:#FF8A8A;--ink:#FFEFEF;--mut:#C9A0A0}
+:root[data-theme="turquoise"]{--bg:#02100F;--bar:#08201F;--line:#123C3A;--bub:#0E2E2C;--in:#2F7A75;--g:#0E7C7B;--gl:#5EEAD4;--ink:#E6FFFB;--mut:#8FC4BE}
+:root[data-theme="dore"]{--bg:#0C0A02;--bar:#1A1604;--line:#38300F;--bub:#2A2409;--in:#7D6A22;--g:#8A6500;--gl:#FFD54A;--ink:#FFF8E1;--mut:#C7B885}
 :root[data-theme="clair"]{--bg:#FBF7F0;--bar:#FFFFFF;--line:#DDD3C3;--bub:#EFE7D8;--in:#8A7F70;--g:#0F6B4F;--gl:#0B6B4C;--ink:#1F1A14;--mut:#6B6258;color-scheme:light}
 :root[data-theme="clair"] .ov{color:#F2EFE8}
 :root[data-theme="clair"] .ov .mut{color:#B8B0A4}
@@ -211,6 +218,8 @@ const fr = m =>
   /at least 6/i.test(m) ? "Mot de passe : 6 caractères minimum." :
   /valid email|invalid.*email/i.test(m) ? "Adresse e-mail invalide." :
   /not confirmed/i.test(m) ? "Confirme d’abord ton adresse e-mail : ouvre le message que nous t’avons envoyé (regarde aussi les courriers indésirables)." :
+  /once every|security purposes/i.test(m) ? "Patiente une minute avant de redemander un e-mail." :
+  /different from the old/i.test(m) ? "Choisis un mot de passe différent de l’ancien." :
   /rate limit/i.test(m) ? "Trop d’essais. Attends un moment." :
   "Action impossible. Vérifie ta connexion internet.";
 
@@ -221,6 +230,32 @@ const tabs = on => h("nav", { class: "tabs" },
   h("button", { class: on === "p" ? "on" : "", onclick: profView }, "Profil"));
 
 // ---------- Connexion ----------
+let recovering = false;
+function recoveryView() {
+  stop();
+  const p1 = h("input", { class: "inp", type: "password", autocomplete: "new-password" });
+  const p2 = h("input", { class: "inp", type: "password", autocomplete: "new-password" });
+  const err = h("div", { class: "err", role: "alert" });
+  const go = h("button", { class: "btn" }, "Enregistrer le mot de passe");
+  go.onclick = async () => {
+    err.textContent = "";
+    if (p1.value.length < 6) { err.textContent = "Mot de passe : 6 caractères minimum."; return; }
+    if (p1.value !== p2.value) { err.textContent = "Les deux mots de passe ne sont pas identiques."; return; }
+    go.disabled = true;
+    const { data, error } = await sb.auth.updateUser({ password: p1.value });
+    go.disabled = false;
+    if (error) { err.textContent = fr(error.message); return; }
+    recovering = false;
+    history.replaceState(null, "", location.pathname + location.search);
+    me = data.user;
+    setTimeout(start, 0);
+    setTimeout(() => toast("Mot de passe changé."), 800);
+  };
+  show(h("div", { class: "body pad auth" },
+    h("h1", { class: "logo" }, "Nouveau mot de passe"),
+    h("p", { class: "mut" }, "Choisis un nouveau mot de passe pour ton compte Bomoko."),
+    h("label", {}, "Nouveau mot de passe", p1), h("label", {}, "Confirme le mot de passe", p2), err, go));
+}
 // Passe à true quand la connexion avec Apple (iCloud) est configurée dans Supabase
 const APPLE_LOGIN = false;
 function authView(signup = false) {
@@ -248,6 +283,15 @@ function authView(signup = false) {
     if (r.error) { err.textContent = fr(r.error.message); if (/not confirmed/i.test(r.error.message)) resend.style.display = "block"; }
     else if (signup && !r.data.session) { err.textContent = "Compte créé. Un e-mail de confirmation vient d’être envoyé à " + e + ". Ouvre-le (regarde aussi les courriers indésirables), puis connecte-toi."; resend.style.display = "block"; }
   };
+  const note = h("div", { class: "mut", role: "status", style: "font-size:14px" });
+  const forgot = signup ? null : h("button", { class: "btn alt", style: "height:36px;font-size:14px", onclick: async () => {
+    err.textContent = ""; note.textContent = "";
+    const e = em.value.trim();
+    if (!e) { err.textContent = "Écris d’abord ton adresse e-mail dans la case ci-dessus."; return; }
+    const { error } = await sb.auth.resetPasswordForEmail(e, { redirectTo: back });
+    if (error) err.textContent = fr(error.message);
+    else note.textContent = "Si un compte existe avec cette adresse, un e-mail vient d’être envoyé pour choisir un nouveau mot de passe. Regarde aussi les courriers indésirables.";
+  } }, "Mot de passe oublié ?");
   const oauth = async provider => {
     err.textContent = "";
     sessionStorage.setItem("bk-q", location.search);
@@ -263,7 +307,7 @@ function authView(signup = false) {
     signup && h("label", {}, "Ton nom", nm),
     h("label", {}, "E-mail", em),
     h("label", {}, "Mot de passe", pw),
-    err, go, resend,
+    err, note, go, resend, forgot,
     h("div", { class: "mut", style: "text-align:center;font-size:13px" }, "ou"),
     ...social,
     h("button", { class: "btn alt", onclick: () => authView(!signup) }, signup ? "J’ai déjà un compte" : "Créer un compte"),
@@ -1205,7 +1249,8 @@ function composeView() {
 }
 
 // ---------- Bomoko Pro : apparence ----------
-const THEMES = { noir: ["Noir", "#000", "#4CC9A0"], minuit: ["Minuit", "#05070F", "#8FB0FF"], foret: ["Forêt", "#030A06", "#5FE0B0"], prune: ["Prune", "#0A050E", "#D3A5FF"], clair: ["Clair", "#FBF7F0", "#0B6B4C"] };
+const THEMES = { noir: ["Noir", "#000", "#4CC9A0"], minuit: ["Minuit", "#05070F", "#8FB0FF"], foret: ["Forêt", "#030A06", "#5FE0B0"], prune: ["Prune", "#0A050E", "#D3A5FF"], clair: ["Clair", "#FBF7F0", "#0B6B4C"],
+  orage: ["Orage", "#07090C", "#9CB8D6"], orange: ["Orange", "#0D0702", "#FFA94D"], rose: ["Rose", "#100409", "#FF8FC0"], rouge: ["Rouge", "#0D0303", "#FF8A8A"], turquoise: ["Turquoise", "#02100F", "#5EEAD4"], dore: ["Doré", "#0C0A02", "#FFD54A"] };
 const WALLS = { aucun: "Aucun", points: "Points", vagues: "Rayures", savane: "Savane", nuit: "Nuit" };
 const isPro = () => !!(profile && profile.pro_until && new Date(profile.pro_until) > new Date());
 function applyTheme(prevTheme, prevBg) {
@@ -1358,6 +1403,7 @@ const PAGES = {
       "• Le badge bleu ✓ indique un compte certifié par Bomoko. Il peut être retiré, et il disparaît si le nom du compte change.",
       "• Bomoko Pro est une option payante (thèmes, fonds de discussion…). Le paiement arrive bientôt."]],
     ["Un problème ?", [
+      "• Mot de passe oublié : sur l’écran de connexion, écris ton adresse e-mail puis appuie sur « Mot de passe oublié ? ». Tu reçois un e-mail pour en choisir un nouveau. Si tu t’es inscrit avec Google, utilise « Continuer avec Google ».",
       "• « Impossible de charger » : vérifie ton réseau, puis recharge la page ou ferme et rouvre l’app.",
       "• Pas de son ou pas d’image pendant un appel : vérifie les autorisations du micro et de la caméra dans ton navigateur.",
       "• Le blocage et le signalement dans l’app arrivent bientôt. En attendant, écris-nous : {contact}.",
@@ -1927,6 +1973,8 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catc
 
 // ---------- Démarrage ----------
 sb.auth.onAuthStateChange((ev, s) => {
+  if (ev === "PASSWORD_RECOVERY") { recovering = true; recoveryView(); return; }
+  if (recovering) return;
   if (!s) {
     stopCalls();
     const u = LS.get("user");
