@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-18c">
+<meta name="app-version" content="2026-11-24a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -1650,8 +1650,37 @@ async function shopView(slug, back) {
 let newOrders = 0;
 const ORDER_ST = { new: "Nouvelle", confirmed: "Confirmée", ready: "Prête", delivered: "Livrée", cancelled: "Annulée" };
 const ORDER_COL = { new: "#F2A900", confirmed: "#2F5BD0", ready: "#7A4EAB", delivered: "#0F6B4F", cancelled: "#6B2A2A" };
-const ORDER_SEL = "id,code,status,total,currency,note,created_at,shop:shops(id,name,slug,owner_id,logo_path),buyer:profiles!buyer_id(id,display_name,avatar_url),items:order_items(name,price,qty)";
+const ORDER_SEL = "id,code,status,total,currency,payment_status,note,created_at,shop:shops(id,name,slug,owner_id,logo_path),buyer:profiles!buyer_id(id,display_name,avatar_url),items:order_items(name,price,qty)";
 const stChip = st => h("span", { style: "font-size:12px;padding:2px 8px;border-radius:10px;white-space:nowrap;color:" + (st === "new" ? "#1F1A14" : "#fff") + ";background:" + (ORDER_COL[st] || "#444") }, ORDER_ST[st] || st);
+const PAY_ST = { unpaid: "Non payée", pending: "Paiement en cours", paid: "Payée", test_paid: "Payée (test)", failed: "Paiement échoué" };
+const PAY_COL = { unpaid: "#555", pending: "#F2A900", paid: "#0F6B4F", test_paid: "#2F5BD0", failed: "#6B2A2A" };
+const payChip = st => { const k = st || "unpaid"; return h("span", { style: "font-size:12px;padding:2px 8px;border-radius:10px;white-space:nowrap;color:" + (k === "pending" ? "#1F1A14" : "#fff") + ";background:" + (PAY_COL[k] || "#444") }, PAY_ST[k] || k); };
+const PAY_OPS = [["mpesa", "M-Pesa"], ["airtel", "Airtel Money"], ["orange", "Orange Money"], ["afrimoney", "Afrimoney"]];
+
+// Paiement Mobile Money (MODE TEST : aucun argent réel n'est prélevé)
+function paySheet(o, done) {
+  const op = h("select", { class: "inp", "aria-label": "Opérateur" }, PAY_OPS.map(x => h("option", { value: x[0] }, x[1])));
+  const ph = h("input", { class: "inp", type: "tel", inputmode: "tel", autocomplete: "tel", placeholder: "Ex. : 0812345678", "aria-label": "Numéro Mobile Money" });
+  const label = "Payer " + money(o.total, o.currency);
+  const go = h("button", { class: "btn" }, label);
+  const sh = sheetEl(h("div", { style: "font-weight:600;font-size:18px" }, "Payer en Mobile Money"),
+    h("div", { style: "color:#F2A900;font-size:14px" }, "MODE TEST : aucun argent réel n’est prélevé."),
+    h("label", {}, "Opérateur", op), h("label", {}, "Numéro Mobile Money", ph), go,
+    h("button", { class: "btn alt", onclick: () => sh.remove() }, "Annuler"));
+  go.onclick = async () => {
+    const phone = ph.value.replace(/[\s.-]/g, "");
+    if (!/^\+?[0-9]{9,15}$/.test(phone)) return toast("Numéro invalide.");
+    if (!navigator.onLine) return toast("Il faut du réseau pour payer.");
+    go.disabled = true; go.textContent = "Validation sur ton téléphone…";
+    const a = await sb.rpc("start_payment", { p_order: o.id, p_operator: op.value, p_phone: phone });
+    if (a.error) { go.disabled = false; go.textContent = label; return toast(netErr(a.error) ? "Réseau indisponible. Réessaie." : (a.error.message || "Paiement impossible.")); }
+    await new Promise(r => setTimeout(r, 2000));
+    const b = await sb.rpc("confirm_test_payment", { p_payment: a.data });
+    sh.remove();
+    toast(b.error ? "Paiement non confirmé. Réessaie." : "Paiement test enregistré.");
+    done();
+  };
+}
 const cartGet = sid => LS.get("cart:" + sid) || {};
 const cartSave = (sid, c) => { Object.keys(c).forEach(k => { if (!(c[k] > 0)) delete c[k]; }); LS.set("cart:" + sid, c); };
 const cartCount = c => Object.values(c).reduce((a, b) => a + b, 0);
@@ -1706,7 +1735,7 @@ function cartView(s, prods, back) {
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => shopView(s.slug, back) }, "←"),
       h("div", { style: "font-weight:600;font-size:18px" }, "Panier · " + s.name)),
     h("div", { class: "body pad" }, rows, note, totEl,
-      h("div", { class: "mut", style: "font-size:13px" }, "Le paiement et la livraison se règlent directement avec le vendeur.")),
+      h("div", { class: "mut", style: "font-size:13px" }, "Après l’envoi, tu pourras payer en Mobile Money (mode test) ou directement au vendeur. La livraison se règle avec le vendeur.")),
     h("div", { class: "bar" }, send));
   draw();
 }
@@ -1762,6 +1791,8 @@ async function orderDetail(id, mode) {
     if (o.status === "ready") acts.push(h("button", { class: "btn", onclick: () => setSt("delivered") }, "Marquer comme livrée"));
     if (["new", "confirmed", "ready"].includes(o.status)) acts.push(h("button", { class: "btn alt", onclick: () => { if (confirm(o.status === "new" ? "Refuser cette commande ?" : "Annuler cette commande ?")) setSt("cancelled"); } }, o.status === "new" ? "Refuser" : "Annuler la commande"));
   } else if (o.status === "new") acts.push(h("button", { class: "btn alt", onclick: () => { if (confirm("Annuler ta commande ?")) setSt("cancelled"); } }, "Annuler ma commande"));
+  if (!sell && o.status !== "cancelled" && ["unpaid", "pending", "failed"].includes(o.payment_status || "unpaid"))
+    acts.unshift(h("button", { class: "btn", onclick: () => paySheet(o, () => orderDetail(o.id, mode)) }, "Payer en Mobile Money"));
   body.replaceChildren(
     h("div", { style: "display:flex;align-items:center;gap:10px" }, h("div", { style: "font-size:20px;font-weight:600;flex:1" }, "Commande #" + o.code), stChip(o.status)),
     h("div", { class: "mut" }, fmtDay(o.created_at)),
@@ -1769,10 +1800,11 @@ async function orderDetail(id, mode) {
       h("div", { class: "grow" }, h("div", { class: "mut", style: "font-size:13px" }, sell ? "Acheteur" : "Boutique"), h("div", { class: "ell", style: "font-weight:600" }, other.display_name))) : null,
     ...(o.items || []).map(it => h("div", { style: "display:flex;gap:10px" }, h("div", { style: "flex:1" }, it.name + " × " + it.qty), h("div", { class: "mut" }, money(it.price * it.qty, o.currency)))),
     h("div", { style: "font-weight:700;font-size:18px;border-top:1px solid var(--line);padding-top:8px" }, "Total : " + money(o.total, o.currency)),
+    h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { class: "mut" }, "Paiement :"), payChip(o.payment_status)),
     o.note ? h("div", {}, h("div", { class: "mut", style: "font-size:13px" }, "Message de l’acheteur"), h("div", { style: "white-space:pre-wrap" }, o.note)) : null,
     ...acts,
     other && me && other.id !== me.id ? h("button", { class: "btn alt", onclick: () => friendSheet(other.id) }, sell ? "Écrire à l’acheteur" : "Écrire au vendeur") : null,
-    h("div", { class: "mut", style: "font-size:13px" }, "Le paiement et la livraison se règlent directement entre l’acheteur et le vendeur."));
+    h("div", { class: "mut", style: "font-size:13px" }, "Tu peux payer en Mobile Money (mode test pour l’instant) ou directement au vendeur. La livraison se règle avec le vendeur."));
 }
 
 // Ma boutique (abonnés Pro)
