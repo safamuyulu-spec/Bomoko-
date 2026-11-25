@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-24a">
+<meta name="app-version" content="2026-11-23a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -46,7 +46,7 @@ label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600}
 .btn:disabled{opacity:.5}
 .btn.alt{background:none;color:var(--gl)}
 .tabs{display:flex;border-top:1px solid var(--line);background:var(--bar);padding-bottom:env(safe-area-inset-bottom)}
-.tabs button{flex:1;height:60px;border:0;background:none;color:var(--mut);font-size:13px}
+.tabs button{flex:1;height:60px;border:0;background:none;color:var(--mut);font-size:12px;padding:0 2px}
 .tabs .on{color:var(--gl);font-weight:600}
 .msgs{padding:14px;display:flex;flex-direction:column;gap:8px}
 .b{max-width:78%;padding:9px 13px;border-radius:16px 16px 16px 4px;background:var(--bub);align-self:flex-start;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -226,6 +226,7 @@ const fr = m =>
 const tabs = on => h("nav", { class: "tabs" },
   h("button", { class: on === "l" ? "on" : "", onclick: listView }, "Discussions"),
   h("button", { class: on === "s" ? "on" : "", onclick: statusView }, "Statuts"),
+  h("button", { class: on === "c" ? "on" : "", onclick: channelsView }, "Chaînes"),
   h("button", { class: on === "b" ? "on" : "", "data-tab": "b", onclick: shopsView }, "Boutiques" + (newOrders ? " (" + newOrders + ")" : "")),
   h("button", { class: on === "p" ? "on" : "", onclick: profView }, "Profil"));
 
@@ -327,6 +328,7 @@ async function start() {
   listenCalls();
   listView();
   if (pendingShop) { const sl = pendingShop; pendingShop = null; history.replaceState(null, "", location.pathname); setTimeout(() => shopView(sl, listView), 300); }
+  if (pendingChannel) { const sl = pendingChannel, code = pendingInvite; pendingChannel = pendingInvite = null; history.replaceState(null, "", location.pathname); setTimeout(() => openChannelBySlug(sl, code), 300); }
   const addId = new URLSearchParams(location.search).get("add");
   if (addId && UUID_RE.test(addId)) { history.replaceState(null, "", location.pathname); setTimeout(() => friendSheet(addId), 300); }
 }
@@ -1337,7 +1339,7 @@ function profView() {
       h("button", { class: "btn alt", onclick: () => pick.click() }, "Changer la photo"),
       h("div", { style: "background:var(--bar);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px" },
         h("div", { style: "font-weight:600;font-size:18px" }, isPro() ? "Bomoko Pro ✓" : "Bomoko Pro"),
-        h("div", { class: "mut" }, isPro() ? "Actif jusqu’au " + new Date(profile.pro_until).toLocaleDateString("fr") + "." : "Boutique en ligne avec catalogue et commandes, puis chaînes. Thèmes et fonds de discussion inclus. Le paiement arrive bientôt."),
+        h("div", { class: "mut" }, isPro() ? "Actif jusqu’au " + new Date(profile.pro_until).toLocaleDateString("fr") + "." : "Boutique en ligne avec catalogue et commandes, chaînes de diffusion, thèmes et fonds de discussion. Le paiement arrive bientôt."),
         isPro() ? h("button", { class: "btn", style: "height:44px", onclick: myShopView }, "Ma boutique") : h("button", { class: "btn", style: "height:44px", onclick: proSell }, "Vendre avec Bomoko Pro"),
         h("button", { class: "btn alt", style: "height:44px", onclick: customizeView }, isPro() ? "Personnaliser l’apparence" : "Essayer les thèmes")),
       h("label", {}, "Ton nom", nm),
@@ -1362,6 +1364,318 @@ function profView() {
     tabs("p"));
 }
 
+// ---------- Chaînes de diffusion ----------
+const chAv = p => p ? sb.storage.from("channel-avatars").getPublicUrl(p).data.publicUrl : null;
+const CH_COLS = "id,slug,name,description,category,avatar_path,verified,subscribers_count,is_public,owner_id";
+const CH_CATS = ["Musique", "Commerce", "Église", "École", "Association", "Actualités", "Divertissement", "Autre"];
+const chLink = (slug, code) => location.origin + location.pathname + "?channel=" + slug + (code ? "&invite=" + code : "");
+const nAbo = n => n + (n > 1 ? " abonnés" : " abonné");
+let pendingChannel = null, pendingInvite = null;
+{
+  const q = new URLSearchParams(location.search), sl = (q.get("channel") || "").toLowerCase();
+  if (/^[a-z0-9-]{3,40}$/.test(sl)) { pendingChannel = sl; pendingInvite = /^[a-z0-9]{6,20}$/i.test(q.get("invite") || "") ? q.get("invite") : null; }
+}
+
+function proChannels() {
+  const sh = sheetEl(h("div", { style: "font-size:20px;font-weight:600" }, "Crée ta chaîne avec Bomoko Pro"),
+    h("div", {}, "• Publie pour tes abonnés : texte, photos, vidéos et audios"),
+    h("div", {}, "• Chaîne publique (visible dans l’annuaire) ou privée (par lien d’invitation)"),
+    h("div", {}, "• Certification possible pour les chaînes officielles (badge bleu)"),
+    h("div", { class: "mut", style: "margin-top:6px" }, "Le paiement de l’abonnement arrive bientôt. Pour l’activer maintenant, écris à " + LEGAL.contact + "."),
+    h("button", { class: "btn", onclick: () => sh.remove() }, "Fermer"));
+}
+
+const chRow = (c, sub, right, onclick) => h("div", { class: "row", role: "button", tabindex: "0", style: "padding:10px 0;cursor:pointer", onclick, onkeydown: e => { if (e.key === "Enter") onclick(); } },
+  av(c.name, chAv(c.avatar_path), 48),
+  h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, c.name, c.verified ? badge() : null), h("div", { class: "mut ell", style: "font-size:13px" }, sub)),
+  right);
+
+async function channelsView() {
+  stop();
+  let q = "", onlyV = false;
+  const search = h("input", { class: "inp", type: "search", "aria-label": "Chercher une chaîne", placeholder: "Chercher une chaîne" });
+  const chip = h("button", { class: "btn alt", "aria-pressed": "false", style: "height:36px;padding:0 12px;font-size:14px;border:1px solid var(--in)" }, "Certifiées seulement");
+  const body = h("div", { class: "body pad", style: "gap:8px" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" }, h("h1", { class: "logo" }, "Chaînes"),
+      h("button", { class: "btn alt", style: "margin-left:auto;padding:0 10px", onclick: () => isPro() ? chEditor(null) : proChannels() }, "+ Créer")),
+    h("div", { class: "pad", style: "padding-bottom:0;gap:8px" }, search, h("div", { style: "display:flex" }, chip)), body, tabs("c"));
+
+  const render = async () => {
+    let d = sb.from("channels").select(CH_COLS).eq("is_public", true).order("verified", { ascending: false }).order("subscribers_count", { ascending: false }).limit(40);
+    if (q) d = d.ilike("name", "%" + q.replace(/[%,()]/g, "") + "%");
+    if (onlyV) d = d.eq("verified", true);
+    const [mineR, dirR] = await Promise.all([sb.from("channel_members").select("role,last_read_at,channels(" + CH_COLS + ")").eq("user_id", me.id), d]);
+    if (mineR.error && dirR.error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger les chaînes. Vérifie ta connexion.")); return; }
+    const mine = (mineR.data || []).filter(m => m.channels);
+    const ids = mine.map(m => m.channels.id), last = {}, unread = {};
+    if (ids.length) {
+      const { data: ps } = await sb.from("channel_posts").select("channel_id,body,created_at").in("channel_id", ids).order("created_at", { ascending: false }).limit(200);
+      (ps || []).forEach(p => { if (!last[p.channel_id]) last[p.channel_id] = p; });
+      mine.forEach(m => { unread[m.channels.id] = (ps || []).filter(p => p.channel_id === m.channels.id && new Date(p.created_at) > new Date(m.last_read_at)).length; });
+    }
+    const els = [];
+    if (mine.length && !q && !onlyV) {
+      els.push(h("div", { class: "mut" }, "Mes chaînes"));
+      mine.sort((a, b) => new Date((last[b.channels.id] || {}).created_at || 0) - new Date((last[a.channels.id] || {}).created_at || 0));
+      mine.forEach(m => {
+        const c = m.channels, l = last[c.id], u = unread[c.id];
+        els.push(chRow(c, l ? (l.body || "📎 Média") : (m.role === "owner" ? "Aucune publication" : nAbo(c.subscribers_count)),
+          u ? h("span", { style: "background:var(--g);color:#fff;border-radius:12px;padding:2px 8px;font-size:12px;font-weight:600" }, u > 99 ? "99+" : String(u)) : h("span", { class: "mut", style: "font-size:12px" }, l ? fmt(l.created_at) : ""),
+          () => chView(c, channelsView)));
+      });
+    }
+    const mineIds = new Set(ids);
+    const dir = (dirR.data || []).filter(c => !mineIds.has(c.id));
+    els.push(h("div", { class: "mut", style: "margin-top:8px" }, onlyV ? "Chaînes certifiées" : "Découvrir des chaînes"));
+    if (!dir.length) els.push(h("p", { class: "mut" }, q || onlyV ? "Aucune chaîne trouvée." : "Aucune chaîne publique pour le moment."));
+    dir.forEach(c => els.push(chRow(c, nAbo(c.subscribers_count) + (c.category ? " · " + c.category : ""),
+      h("button", { class: "btn", style: "height:36px;padding:0 12px;font-size:14px", onclick: async e => {
+        e.stopPropagation();
+        const { error } = await sb.from("channel_members").insert({ channel_id: c.id, user_id: me.id, role: "subscriber" });
+        toast(error ? "Abonnement impossible." : "Abonné à " + c.name + ".");
+        render();
+      } }, "S’abonner"), () => chView(c, channelsView))));
+    body.replaceChildren(...els);
+  };
+  let tm;
+  search.oninput = () => { clearTimeout(tm); tm = setTimeout(() => { q = search.value.trim(); render(); }, 300); };
+  chip.onclick = () => { onlyV = !onlyV; chip.setAttribute("aria-pressed", String(onlyV)); chip.style.background = onlyV ? "var(--g)" : "none"; chip.style.color = onlyV ? "#fff" : ""; render(); };
+  render();
+}
+
+async function openChannelBySlug(slug, code) {
+  let { data: c } = await sb.from("channels").select(CH_COLS).eq("slug", slug).maybeSingle();
+  if (!c && code) {
+    const { error } = await sb.rpc("join_channel_invite", { p_slug: slug, p_code: code });
+    if (!error) ({ data: c } = await sb.from("channels").select(CH_COLS).eq("slug", slug).maybeSingle());
+  }
+  if (!c) return toast("Chaîne introuvable, ou privée.");
+  chView(c, listView);
+}
+
+async function chView(c0, back) {
+  stop();
+  let c = c0;
+  const goBack = () => (back ? back() : channelsView());
+  const list = h("div", { style: "padding:12px;display:flex;flex-direction:column;gap:10px" });
+  const box = h("div", { class: "body" }, list);
+  const head = h("div", { style: "min-width:0;flex:1" });
+  const foot = h("div");
+  const menuBtn = h("button", { class: "btn alt", "aria-label": "Options", style: "padding:0 10px;font-size:20px" }, "⋯");
+  show(h("div", { class: "top" }, h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: goBack }, "←"), head, menuBtn), box, foot);
+
+  const [cr, mr] = await Promise.all([
+    sb.from("channels").select(CH_COLS + ",invite_code").eq("id", c0.id).maybeSingle(),
+    sb.from("channel_members").select("role").eq("channel_id", c0.id).eq("user_id", me.id).maybeSingle()]);
+  if (cr.data) c = cr.data;
+  const role = mr.data ? mr.data.role : null, isAdmin = role === "owner" || role === "admin", invite = c.invite_code || null;
+  head.replaceChildren(h("div", { style: "display:flex;align-items:center;gap:10px;min-width:0" }, av(c.name, chAv(c.avatar_path), 40),
+    h("div", { style: "min-width:0" }, h("div", { class: "ell", style: "font-weight:600" }, c.name, c.verified ? badge() : null),
+      h("div", { class: "mut ell", style: "font-size:13px" }, nAbo(c.subscribers_count) + (c.is_public ? "" : " · privée")))));
+  if (c.description || c.category) list.append(h("div", { class: "mut", style: "padding:2px;font-size:14px;white-space:pre-wrap" }, [c.category, c.description].filter(Boolean).join(" · ")));
+
+  // Menu
+  menuBtn.onclick = () => {
+    const link = chLink(c.slug, c.is_public ? null : invite);
+    const sh = sheetEl(h("div", { style: "font-weight:600" }, c.name),
+      h("button", { class: "btn", onclick: () => { sh.remove(); shareLink(link, c.name); } }, "Partager la chaîne"),
+      h("button", { class: "btn alt", onclick: async () => { sh.remove(); try { await navigator.clipboard.writeText(link); toast("Lien copié."); } catch (e) { toast(link); } } }, "Copier le lien"),
+      isAdmin ? h("button", { class: "btn alt", onclick: () => { sh.remove(); chEditor(c); } }, "Modifier la chaîne") : null,
+      role && role !== "owner" ? h("button", { class: "btn alt", onclick: async () => { sh.remove(); await sb.from("channel_members").delete().eq("channel_id", c.id).eq("user_id", me.id); toast("Tu n’es plus abonné."); goBack(); } }, "Se désabonner") : null,
+      role === "owner" ? h("button", { class: "btn alt", style: "color:#FF8A80", onclick: async () => {
+        if (!confirm("Supprimer définitivement la chaîne « " + c.name + " » et toutes ses publications ?")) return;
+        sh.remove();
+        const { error } = await sb.from("channels").delete().eq("id", c.id);
+        if (error) toast("Suppression impossible."); else { toast("Chaîne supprimée."); channelsView(); }
+      } }, "Supprimer la chaîne") : null,
+      h("button", { class: "btn alt", onclick: () => sh.remove() }, "Fermer"));
+  };
+
+  // Publications
+  const likes = new Map(), mine = new Set(), seen = new Set();
+  let lastAt = null;
+  const addPost = p => {
+    if (seen.has(p.id)) return;
+    seen.add(p.id); lastAt = p.created_at;
+    const np = document.getElementById("nopost"); if (np) np.remove();
+    const card = h("div", { style: "background:var(--bub);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px" });
+    if (p.media_path) {
+      const holder = h("div", { class: "mut" }, "Chargement…");
+      card.append(holder);
+      sb.storage.from("channel-media").createSignedUrl(p.media_path, 3600).then(({ data }) => {
+        if (!data) { holder.textContent = "Fichier indisponible"; return; }
+        const u = data.signedUrl, t = p.media_type || "";
+        holder.replaceWith(t.startsWith("image") ? h("img", { src: u, alt: p.body || "Photo", style: "max-width:100%;border-radius:10px" })
+          : t.startsWith("video") ? h("video", { src: u, controls: true, preload: "metadata", playsinline: true, style: "max-width:100%;border-radius:10px" })
+          : h("audio", { src: u, controls: true, preload: "metadata", style: "width:100%" }));
+      });
+    }
+    if (p.body) card.append(h("div", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, p.body));
+    const lb = h("button", { class: "btn alt", style: "height:32px;padding:0;font-size:14px;color:inherit" });
+    const paint = () => { lb.textContent = (mine.has(p.id) ? "♥ " : "♡ ") + (likes.get(p.id) || 0); lb.setAttribute("aria-pressed", String(mine.has(p.id))); };
+    lb.onclick = async () => {
+      const on = mine.has(p.id);
+      const r = on ? await sb.from("channel_likes").delete().eq("post_id", p.id).eq("user_id", me.id) : await sb.from("channel_likes").insert({ post_id: p.id, user_id: me.id });
+      if (r.error) return toast("Action impossible.");
+      if (on) { mine.delete(p.id); likes.set(p.id, Math.max(0, (likes.get(p.id) || 1) - 1)); } else { mine.add(p.id); likes.set(p.id, (likes.get(p.id) || 0) + 1); }
+      paint();
+    };
+    paint();
+    card.append(h("div", { style: "display:flex;align-items:center;gap:12px" }, lb, h("span", { class: "mut", style: "font-size:12px" }, fmt(p.created_at)),
+      isAdmin ? h("button", { class: "btn alt", style: "height:32px;padding:0;font-size:13px;margin-left:auto;color:var(--mut)", onclick: async () => {
+        if (!confirm("Supprimer cette publication ?")) return;
+        const { error } = await sb.from("channel_posts").delete().eq("id", p.id);
+        if (error) toast("Suppression impossible."); else { card.remove(); if (p.media_path) sb.storage.from("channel-media").remove([p.media_path]); }
+      } }, "Supprimer") : null));
+    list.append(card); box.scrollTop = box.scrollHeight;
+  };
+  const { data: ps, error: pe } = await sb.from("channel_posts").select("*").eq("channel_id", c.id).order("created_at", { ascending: false }).limit(50);
+  if (pe) list.append(h("p", { class: "err" }, "Impossible de charger les publications. Vérifie ta connexion."));
+  const posts = (ps || []).slice().reverse();
+  if (posts.length) {
+    const { data: lk } = await sb.from("channel_likes").select("post_id,user_id").in("post_id", posts.map(p => p.id));
+    (lk || []).forEach(l => { likes.set(l.post_id, (likes.get(l.post_id) || 0) + 1); if (l.user_id === me.id) mine.add(l.post_id); });
+  }
+  posts.forEach(addPost);
+  if (!posts.length && !pe) list.append(h("p", { class: "mut", id: "nopost" }, isAdmin ? "Aucune publication. Écris la première ci-dessous." : "Aucune publication pour le moment."));
+  chan = sb.channel("chp-" + c.id).on("postgres_changes", { event: "INSERT", schema: "public", table: "channel_posts", filter: "channel_id=eq." + c.id }, pl => addPost(pl.new)).subscribe();
+  poll = setInterval(async () => {
+    let q2 = sb.from("channel_posts").select("*").eq("channel_id", c.id).order("created_at");
+    if (lastAt) q2 = q2.gt("created_at", lastAt);
+    const { data } = await q2;
+    (data || []).forEach(addPost);
+  }, 20000);
+  if (role) sb.from("channel_members").update({ last_read_at: new Date().toISOString() }).eq("channel_id", c.id).eq("user_id", me.id).then(() => {});
+
+  // Bas de l'écran : s'abonner, ou publier si on est administrateur
+  if (!role) {
+    foot.append(h("div", { class: "bar" }, h("button", { class: "btn", style: "flex:1", onclick: async () => {
+      const { error } = await sb.from("channel_members").insert({ channel_id: c.id, user_id: me.id, role: "subscriber" });
+      if (error) return toast("Abonnement impossible.");
+      toast("Abonné à " + c.name + "."); chView(c, back);
+    } }, "S’abonner")));
+  } else if (!isAdmin) {
+    foot.append(h("div", { class: "mut", style: "text-align:center;padding:12px;font-size:13px;border-top:1px solid var(--line);background:var(--bar)" }, "Seuls les administrateurs publient dans cette chaîne."));
+  } else {
+    let file = null;
+    const inp = h("input", { class: "inp", placeholder: "Écrire une publication", maxlength: 3000, "aria-label": "Écrire une publication" });
+    const fileTag = h("div", { class: "mut", style: "display:none;padding:6px 12px;font-size:13px;background:var(--bar)" });
+    const pickF = h("input", { type: "file", accept: "image/*,video/*,audio/*", style: "display:none" });
+    pickF.onchange = () => {
+      file = pickF.files[0] || null;
+      if (file && file.size > 25 * 1024 * 1024) { toast("Fichier trop lourd (25 Mo maximum)."); file = null; pickF.value = ""; }
+      if (file) { fileTag.textContent = "📎 " + file.name + " — appuie pour retirer"; fileTag.style.display = "block"; }
+    };
+    fileTag.onclick = () => { file = null; pickF.value = ""; fileTag.style.display = "none"; };
+    const pub = h("button", { class: "btn" }, "Publier");
+    pub.onclick = async () => {
+      const t = inp.value.trim();
+      if (!t && !file) return;
+      pub.disabled = true;
+      try {
+        const row = { channel_id: c.id, author_id: me.id, body: t || null };
+        if (file) {
+          const isImg = (file.type || "").startsWith("image");
+          const blob = isImg ? await fit(file, 1280) : file;
+          const type = isImg ? "image/jpeg" : (file.type || "application/octet-stream");
+          const ext = isImg ? "jpg" : ((file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "bin");
+          const path = c.id + "/" + crypto.randomUUID() + "." + ext;
+          const up = await sb.storage.from("channel-media").upload(path, blob, { contentType: type });
+          if (up.error) throw up.error;
+          row.media_path = path; row.media_type = type; row.media_name = file.name.slice(0, 80);
+        }
+        const { data, error } = await sb.from("channel_posts").insert(row).select().single();
+        if (error) throw error;
+        inp.value = ""; file = null; pickF.value = ""; fileTag.style.display = "none";
+        addPost(data);
+      } catch (e) { toast("Publication impossible. Réessaie."); }
+      pub.disabled = false;
+    };
+    foot.append(fileTag, h("div", { class: "bar" },
+      h("button", { class: "btn alt", "aria-label": "Joindre une photo, une vidéo ou un audio", style: "padding:0 8px;font-size:22px", onclick: () => pickF.click() }, "📎"), pickF, inp, pub));
+  }
+}
+
+function chEditor(c) {
+  stop();
+  const name = h("input", { class: "inp", maxlength: 60, value: c ? c.name : "" });
+  const desc = h("textarea", { class: "inp", maxlength: 300, style: "height:90px;padding:12px;resize:none" });
+  desc.value = c ? (c.description || "") : "";
+  const cat = h("select", { class: "inp" }, ...CH_CATS.map(x => h("option", { value: x }, x)));
+  if (c && c.category) cat.value = c.category;
+  const vis = h("select", { class: "inp" }, h("option", { value: "1" }, "Publique : dans l’annuaire, tout le monde peut s’abonner"), h("option", { value: "0" }, "Privée : seulement avec le lien d’invitation"));
+  vis.value = c && !c.is_public ? "0" : "1";
+  const err = h("div", { class: "err", role: "alert" });
+  let avatarBlob = null;
+  const prev = h("div", {}, av(c ? c.name : "?", c ? chAv(c.avatar_path) : null, 72));
+  const pick = h("input", { type: "file", accept: "image/*", style: "display:none" });
+  pick.onchange = async () => {
+    const f = pick.files[0];
+    if (!f) return;
+    try {
+      const blob = await shrink(f);
+      if (c) {
+        const path = c.id + "/" + crypto.randomUUID() + ".jpg";
+        const up = await sb.storage.from("channel-avatars").upload(path, blob, { contentType: "image/jpeg" });
+        if (up.error) throw up.error;
+        const { error } = await sb.from("channels").update({ avatar_path: path }).eq("id", c.id);
+        if (error) throw error;
+        if (c.avatar_path) sb.storage.from("channel-avatars").remove([c.avatar_path]);
+        c.avatar_path = path;
+        toast("Photo de la chaîne changée.");
+      } else avatarBlob = blob;
+      prev.replaceChildren(av(name.value || "?", URL.createObjectURL(blob), 72));
+    } catch (e) { toast("Image non utilisable, ou envoi impossible."); }
+  };
+  const save = h("button", { class: "btn" }, c ? "Enregistrer" : "Créer la chaîne");
+  save.onclick = async () => {
+    err.textContent = "";
+    const nm = name.value.trim();
+    if (nm.length < 2) { err.textContent = "Donne un nom à ta chaîne (2 lettres minimum)."; return; }
+    save.disabled = true;
+    const fields = { name: nm, description: desc.value.trim() || null, category: cat.value, is_public: vis.value === "1" };
+    try {
+      if (c) {
+        const { error } = await sb.from("channels").update(fields).eq("id", c.id);
+        if (error) throw error;
+        chView({ ...c, ...fields }, channelsView);
+      } else {
+        let base = slugify(nm);
+        if (base.length < 3) base = "chaine-" + base;
+        base = base.replace(/-+$/, "");
+        let created = null, lastErr = null;
+        for (let i = 0; i < 3 && !created; i++) {
+          const slug = i === 0 ? base : base.slice(0, 30) + "-" + Math.random().toString(36).slice(2, 6);
+          const r = await sb.from("channels").insert({ ...fields, owner_id: me.id, slug }).select().single();
+          if (!r.error) created = r.data; else { lastErr = r.error; if (r.error.code !== "23505") break; }
+        }
+        if (!created) throw lastErr;
+        if (avatarBlob) {
+          const path = created.id + "/" + crypto.randomUUID() + ".jpg";
+          const up = await sb.storage.from("channel-avatars").upload(path, avatarBlob, { contentType: "image/jpeg" });
+          if (!up.error) { await sb.from("channels").update({ avatar_path: path }).eq("id", created.id); created.avatar_path = path; }
+        }
+        chView(created, channelsView);
+      }
+    } catch (e) {
+      save.disabled = false;
+      const m = (e && e.message) || "";
+      if (/Limite de 5/i.test(m)) err.textContent = "Tu as déjà 5 chaînes : c’est la limite.";
+      else if (/row-level security|policy/i.test(m)) err.textContent = "Il faut un abonnement Bomoko Pro actif pour créer une chaîne.";
+      else err.textContent = "Enregistrement impossible. Vérifie ton réseau et réessaie.";
+    }
+  };
+  show(h("div", { class: "top" },
+      h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => (c ? chView(c, channelsView) : channelsView()) }, "←"),
+      h("div", { style: "font-weight:600;font-size:18px" }, c ? "Modifier la chaîne" : "Nouvelle chaîne")),
+    h("div", { class: "body pad" },
+      h("div", { style: "display:flex;gap:12px;align-items:center" }, prev,
+        h("button", { class: "btn", style: "height:40px;padding:0 14px;font-size:14px", onclick: () => pick.click() }, c && c.avatar_path ? "Changer la photo" : "Ajouter une photo")),
+      pick,
+      h("label", {}, "Nom de la chaîne", name), h("label", {}, "Description", desc), h("label", {}, "Catégorie", cat), h("label", {}, "Visibilité", vis),
+      err, save));
+}
+
 // ---------- Pages : aide, confidentialité, conditions d'utilisation ----------
 const LEGAL = { editeur: "SMP AI, représentée par Ilela Peter", contact: "bomokocontact6@gmail.com", age: 16, maj: "14 novembre 2026" };
 const PAGES = {
@@ -1384,6 +1698,10 @@ const PAGES = {
     ["Groupes", [
       "• Page Amis, puis « Nouveau groupe » : choisis un nom et des amis. Un groupe ne peut contenir que des amis de la personne qui le crée.",
       "• La gestion des groupes (ajouter, retirer des membres, quitter) arrive bientôt."]],
+    ["Chaînes", [
+      "• Une chaîne sert à publier pour des abonnés : annonces, musique, actualités, offres. Seuls les administrateurs publient ; les abonnés lisent, écoutent et aiment les publications.",
+      "• Onglet Chaînes : retrouve celles auxquelles tu es abonné, découvre l’annuaire des chaînes publiques et appuie sur « S’abonner ». Le badge bleu ✓ indique une chaîne certifiée.",
+      "• Créer une chaîne (« + Créer ») demande un abonnement Bomoko Pro. Elle peut être publique (visible dans l’annuaire) ou privée (accessible seulement par un lien d’invitation). Tu peux en créer 5 au maximum."]],
     ["Sans internet", [
       "• Bomoko s’ouvre sans réseau et affiche tes derniers messages. Un message écrit hors ligne apparaît avec « ⏳ en attente » et part tout seul quand le réseau revient.",
       "• Les photos, fichiers, messages vocaux et appels demandent du réseau."]],
@@ -1429,7 +1747,8 @@ const PAGES = {
       "• Tes messages et fichiers : les membres de la discussion.",
       "• Ton nom, ta photo et ton statut de profil : les autres utilisateurs de Bomoko, pour qu’ils puissent te trouver.",
       "• Tes statuts : les personnes que tu as choisies au moment de publier.",
-      "• Le badge de certification est public."]],
+      "• Le badge de certification est public.",
+      "• Les publications d’une chaîne publique sont visibles par tous les utilisateurs ; celles d’une chaîne privée, seulement par ses abonnés. Les administrateurs d’une chaîne voient son nombre d’abonnés."]],
     ["Nos prestataires", [
       "Bomoko fait appel à : Supabase (comptes, base de données et stockage des fichiers), Agora (transmission des appels audio et vidéo), GitHub Pages (hébergement de l’application), Google (connexion avec Google, si tu la choisis) et Google Fonts (polices de caractères). Ils traitent des données pour faire fonctionner le service."]],
     ["Sécurité", [
@@ -1453,7 +1772,7 @@ const PAGES = {
     ["Règles d’utilisation", [
       "Il est interdit d’utiliser Bomoko pour : harceler, menacer ou humilier ; diffuser des contenus haineux, violents ou illégaux ; partager des contenus sexuels impliquant des mineurs (interdit absolument et signalé aux autorités) ; escroquer ou tromper ; envoyer des messages non sollicités en masse ; diffuser des logiciels malveillants ; violer la vie privée ou les droits d’auteur d’autrui ; attaquer, perturber ou tenter d’accéder sans autorisation au service ou aux données des autres."]],
     ["Tes contenus", [
-      "Tes messages, photos, vidéos et autres contenus restent à toi. Tu nous autorises seulement à les héberger et à les transmettre aux personnes que tu choisis, pour faire fonctionner Bomoko. Tu es responsable de ce que tu envoies et publies."]],
+      "Tes messages, photos, vidéos et autres contenus restent à toi. Tu nous autorises seulement à les héberger et à les transmettre aux personnes que tu choisis, pour faire fonctionner Bomoko. Tu es responsable de ce que tu envoies et publies, y compris dans les chaînes dont tu es administrateur."]],
     ["Modération et certification", [
       "Nous pouvons suspendre ou supprimer un compte qui ne respecte pas ces conditions, ou supprimer un contenu. Le badge de certification est accordé par l’éditeur et peut être retiré."]],
     ["Boutiques et vendeurs", [
@@ -1550,7 +1869,8 @@ function proSell() {
     h("div", {}, "• Ta boutique en ligne avec ton catalogue (100 produits)"),
     h("div", {}, "• Un lien et un code QR à partager partout"),
     h("div", {}, "• Un panier et des commandes avec suivi (nouvelle, confirmée, prête, livrée)"),
-    h("div", { class: "mut" }, "• Bientôt : chaînes de diffusion, paiements par mobile money"),
+    h("div", {}, "• Des chaînes de diffusion : publie pour tes abonnés (texte, photos, vidéos, audios)"),
+    h("div", { class: "mut" }, "• Bientôt : paiements par mobile money"),
     h("div", { class: "mut", style: "margin-top:6px" }, "Le paiement de l’abonnement arrive bientôt. Pour l’activer maintenant, écris à " + LEGAL.contact + "."),
     h("button", { class: "btn", onclick: () => sh.remove() }, "Fermer"));
 }
@@ -1650,37 +1970,8 @@ async function shopView(slug, back) {
 let newOrders = 0;
 const ORDER_ST = { new: "Nouvelle", confirmed: "Confirmée", ready: "Prête", delivered: "Livrée", cancelled: "Annulée" };
 const ORDER_COL = { new: "#F2A900", confirmed: "#2F5BD0", ready: "#7A4EAB", delivered: "#0F6B4F", cancelled: "#6B2A2A" };
-const ORDER_SEL = "id,code,status,total,currency,payment_status,note,created_at,shop:shops(id,name,slug,owner_id,logo_path),buyer:profiles!buyer_id(id,display_name,avatar_url),items:order_items(name,price,qty)";
+const ORDER_SEL = "id,code,status,total,currency,note,created_at,shop:shops(id,name,slug,owner_id,logo_path),buyer:profiles!buyer_id(id,display_name,avatar_url),items:order_items(name,price,qty)";
 const stChip = st => h("span", { style: "font-size:12px;padding:2px 8px;border-radius:10px;white-space:nowrap;color:" + (st === "new" ? "#1F1A14" : "#fff") + ";background:" + (ORDER_COL[st] || "#444") }, ORDER_ST[st] || st);
-const PAY_ST = { unpaid: "Non payée", pending: "Paiement en cours", paid: "Payée", test_paid: "Payée (test)", failed: "Paiement échoué" };
-const PAY_COL = { unpaid: "#555", pending: "#F2A900", paid: "#0F6B4F", test_paid: "#2F5BD0", failed: "#6B2A2A" };
-const payChip = st => { const k = st || "unpaid"; return h("span", { style: "font-size:12px;padding:2px 8px;border-radius:10px;white-space:nowrap;color:" + (k === "pending" ? "#1F1A14" : "#fff") + ";background:" + (PAY_COL[k] || "#444") }, PAY_ST[k] || k); };
-const PAY_OPS = [["mpesa", "M-Pesa"], ["airtel", "Airtel Money"], ["orange", "Orange Money"], ["afrimoney", "Afrimoney"]];
-
-// Paiement Mobile Money (MODE TEST : aucun argent réel n'est prélevé)
-function paySheet(o, done) {
-  const op = h("select", { class: "inp", "aria-label": "Opérateur" }, PAY_OPS.map(x => h("option", { value: x[0] }, x[1])));
-  const ph = h("input", { class: "inp", type: "tel", inputmode: "tel", autocomplete: "tel", placeholder: "Ex. : 0812345678", "aria-label": "Numéro Mobile Money" });
-  const label = "Payer " + money(o.total, o.currency);
-  const go = h("button", { class: "btn" }, label);
-  const sh = sheetEl(h("div", { style: "font-weight:600;font-size:18px" }, "Payer en Mobile Money"),
-    h("div", { style: "color:#F2A900;font-size:14px" }, "MODE TEST : aucun argent réel n’est prélevé."),
-    h("label", {}, "Opérateur", op), h("label", {}, "Numéro Mobile Money", ph), go,
-    h("button", { class: "btn alt", onclick: () => sh.remove() }, "Annuler"));
-  go.onclick = async () => {
-    const phone = ph.value.replace(/[\s.-]/g, "");
-    if (!/^\+?[0-9]{9,15}$/.test(phone)) return toast("Numéro invalide.");
-    if (!navigator.onLine) return toast("Il faut du réseau pour payer.");
-    go.disabled = true; go.textContent = "Validation sur ton téléphone…";
-    const a = await sb.rpc("start_payment", { p_order: o.id, p_operator: op.value, p_phone: phone });
-    if (a.error) { go.disabled = false; go.textContent = label; return toast(netErr(a.error) ? "Réseau indisponible. Réessaie." : (a.error.message || "Paiement impossible.")); }
-    await new Promise(r => setTimeout(r, 2000));
-    const b = await sb.rpc("confirm_test_payment", { p_payment: a.data });
-    sh.remove();
-    toast(b.error ? "Paiement non confirmé. Réessaie." : "Paiement test enregistré.");
-    done();
-  };
-}
 const cartGet = sid => LS.get("cart:" + sid) || {};
 const cartSave = (sid, c) => { Object.keys(c).forEach(k => { if (!(c[k] > 0)) delete c[k]; }); LS.set("cart:" + sid, c); };
 const cartCount = c => Object.values(c).reduce((a, b) => a + b, 0);
@@ -1735,7 +2026,7 @@ function cartView(s, prods, back) {
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: () => shopView(s.slug, back) }, "←"),
       h("div", { style: "font-weight:600;font-size:18px" }, "Panier · " + s.name)),
     h("div", { class: "body pad" }, rows, note, totEl,
-      h("div", { class: "mut", style: "font-size:13px" }, "Après l’envoi, tu pourras payer en Mobile Money (mode test) ou directement au vendeur. La livraison se règle avec le vendeur.")),
+      h("div", { class: "mut", style: "font-size:13px" }, "Le paiement et la livraison se règlent directement avec le vendeur.")),
     h("div", { class: "bar" }, send));
   draw();
 }
@@ -1791,8 +2082,6 @@ async function orderDetail(id, mode) {
     if (o.status === "ready") acts.push(h("button", { class: "btn", onclick: () => setSt("delivered") }, "Marquer comme livrée"));
     if (["new", "confirmed", "ready"].includes(o.status)) acts.push(h("button", { class: "btn alt", onclick: () => { if (confirm(o.status === "new" ? "Refuser cette commande ?" : "Annuler cette commande ?")) setSt("cancelled"); } }, o.status === "new" ? "Refuser" : "Annuler la commande"));
   } else if (o.status === "new") acts.push(h("button", { class: "btn alt", onclick: () => { if (confirm("Annuler ta commande ?")) setSt("cancelled"); } }, "Annuler ma commande"));
-  if (!sell && o.status !== "cancelled" && ["unpaid", "pending", "failed"].includes(o.payment_status || "unpaid"))
-    acts.unshift(h("button", { class: "btn", onclick: () => paySheet(o, () => orderDetail(o.id, mode)) }, "Payer en Mobile Money"));
   body.replaceChildren(
     h("div", { style: "display:flex;align-items:center;gap:10px" }, h("div", { style: "font-size:20px;font-weight:600;flex:1" }, "Commande #" + o.code), stChip(o.status)),
     h("div", { class: "mut" }, fmtDay(o.created_at)),
@@ -1800,11 +2089,10 @@ async function orderDetail(id, mode) {
       h("div", { class: "grow" }, h("div", { class: "mut", style: "font-size:13px" }, sell ? "Acheteur" : "Boutique"), h("div", { class: "ell", style: "font-weight:600" }, other.display_name))) : null,
     ...(o.items || []).map(it => h("div", { style: "display:flex;gap:10px" }, h("div", { style: "flex:1" }, it.name + " × " + it.qty), h("div", { class: "mut" }, money(it.price * it.qty, o.currency)))),
     h("div", { style: "font-weight:700;font-size:18px;border-top:1px solid var(--line);padding-top:8px" }, "Total : " + money(o.total, o.currency)),
-    h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { class: "mut" }, "Paiement :"), payChip(o.payment_status)),
     o.note ? h("div", {}, h("div", { class: "mut", style: "font-size:13px" }, "Message de l’acheteur"), h("div", { style: "white-space:pre-wrap" }, o.note)) : null,
     ...acts,
     other && me && other.id !== me.id ? h("button", { class: "btn alt", onclick: () => friendSheet(other.id) }, sell ? "Écrire à l’acheteur" : "Écrire au vendeur") : null,
-    h("div", { class: "mut", style: "font-size:13px" }, "Tu peux payer en Mobile Money (mode test pour l’instant) ou directement au vendeur. La livraison se règle avec le vendeur."));
+    h("div", { class: "mut", style: "font-size:13px" }, "Le paiement et la livraison se règlent directement entre l’acheteur et le vendeur."));
 }
 
 // Ma boutique (abonnés Pro)
