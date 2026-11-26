@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-24a">
+<meta name="app-version" content="2026-11-25a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -1413,7 +1413,18 @@ async function channelsView() {
       (ps || []).forEach(p => { if (!last[p.channel_id]) last[p.channel_id] = p; });
       mine.forEach(m => { unread[m.channels.id] = (ps || []).filter(p => p.channel_id === m.channels.id && new Date(p.created_at) > new Date(m.last_read_at)).length; });
     }
+    const invR = await sb.from("channel_invites").select("id,role,channel_name").eq("user_id", me.id).eq("status", "pending");
     const els = [];
+    const answer = async (i, ok) => {
+      const r = await sb.rpc("respond_channel_invite", { p_invite: i.id, p_accept: ok });
+      toast(r.error ? "Action impossible." : (ok ? "Invitation acceptée." : "Invitation refusée."));
+      render();
+    };
+    (invR.data || []).forEach(i => els.push(h("div", { style: "background:var(--bub);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px" },
+      h("div", { style: "font-weight:600" }, "Invitation : " + (i.role === "admin" ? "administrateur" : "modérateur") + " de « " + (i.channel_name || "une chaîne") + " »"),
+      h("div", { style: "display:flex;gap:8px" },
+        h("button", { class: "btn", style: "flex:1;height:40px", onclick: () => answer(i, true) }, "Accepter"),
+        h("button", { class: "btn alt", style: "flex:1;height:40px;border:1px solid var(--in)", onclick: () => answer(i, false) }, "Refuser")))));
     if (mine.length && !q && !onlyV) {
       els.push(h("div", { class: "mut" }, "Mes chaînes"));
       mine.sort((a, b) => new Date((last[b.channels.id] || {}).created_at || 0) - new Date((last[a.channels.id] || {}).created_at || 0));
@@ -1481,6 +1492,7 @@ async function chView(c0, back) {
       h("button", { class: "btn", onclick: () => { sh.remove(); shareLink(link, c.name); } }, "Partager la chaîne"),
       h("button", { class: "btn alt", onclick: async () => { sh.remove(); try { await navigator.clipboard.writeText(link); toast("Lien copié."); } catch (e) { toast(link); } } }, "Copier le lien"),
       isAdmin ? h("button", { class: "btn alt", onclick: () => { sh.remove(); chEditor(c); } }, "Modifier la chaîne") : null,
+      (isAdmin || role === "moderator") ? h("button", { class: "btn alt", onclick: () => { sh.remove(); teamView(c, role, () => chView(c, back)); } }, "Équipe de la chaîne") : null,
       role && role !== "owner" ? h("button", { class: "btn alt", onclick: async () => { sh.remove(); await sb.from("channel_members").delete().eq("channel_id", c.id).eq("user_id", me.id); toast("Tu n’es plus abonné."); goBack(); } }, "Se désabonner") : null,
       role === "owner" ? h("button", { class: "btn alt", style: "color:#FF8A80", onclick: async () => {
         if (!confirm("Supprimer définitivement la chaîne « " + c.name + " » et toutes ses publications ?")) return;
@@ -1522,7 +1534,7 @@ async function chView(c0, back) {
     };
     paint();
     card.append(h("div", { style: "display:flex;align-items:center;gap:12px" }, lb, h("span", { class: "mut", style: "font-size:12px" }, fmt(p.created_at)),
-      isAdmin ? h("button", { class: "btn alt", style: "height:32px;padding:0;font-size:13px;margin-left:auto;color:var(--mut)", onclick: async () => {
+      (isAdmin || role === "moderator") ? h("button", { class: "btn alt", style: "height:32px;padding:0;font-size:13px;margin-left:auto;color:var(--mut)", onclick: async () => {
         if (!confirm("Supprimer cette publication ?")) return;
         const { error } = await sb.from("channel_posts").delete().eq("id", p.id);
         if (error) toast("Suppression impossible."); else { card.remove(); if (p.media_path) sb.storage.from("channel-media").remove([p.media_path]); }
@@ -1594,6 +1606,90 @@ async function chView(c0, back) {
     foot.append(fileTag, h("div", { class: "bar" },
       h("button", { class: "btn alt", "aria-label": "Joindre une photo, une vidéo ou un audio", style: "padding:0 8px;font-size:22px", onclick: () => pickF.click() }, "📎"), pickF, inp, pub));
   }
+}
+
+// ---------- Équipe d'une chaîne (administrateurs et modérateurs) ----------
+async function teamView(c, role, back) {
+  stop();
+  const canManage = role === "owner" || role === "admin";
+  const body = h("div", { class: "body pad", style: "gap:8px" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" },
+    h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: back }, "←"),
+    h("div", { class: "ell", style: "font-weight:600;font-size:18px;flex:1" }, "Équipe · " + c.name)), body);
+  const ROLE_FR = { owner: "Propriétaire", admin: "Administrateur", moderator: "Modérateur" };
+  const sm = (t, fn, alt) => h("button", { class: "btn" + (alt ? " alt" : ""), style: "height:36px;padding:0 10px;font-size:14px", onclick: fn }, t);
+  const people = async ids => {
+    if (!ids.length) return new Map();
+    const { data } = await sb.from("profiles").select("id,display_name,avatar_url,verified").in("id", ids);
+    return new Map((data || []).map(p => [p.id, p]));
+  };
+  const person = (p, sub, ...acts) => h("div", { class: "row", style: "padding:8px 0" }, av(p.display_name, p.avatar_url),
+    h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, p.display_name, p.verified ? badge() : null),
+      sub ? h("div", { class: "mut", style: "font-size:13px" }, sub) : null), ...acts);
+  const setRole = async (m, r, ok) => {
+    const x = await sb.rpc("set_channel_role", { p_channel: c.id, p_user: m.user_id, p_role: r });
+    toast(x.error ? (x.error.message || "Action impossible.") : ok);
+    render();
+  };
+  const manage = (m, p) => {
+    const sh = sheetEl(h("div", { style: "font-weight:600" }, p.display_name + " · " + ROLE_FR[m.role]),
+      m.role === "moderator" ? h("button", { class: "btn", onclick: () => { sh.remove(); setRole(m, "admin", "Nommé administrateur."); } }, "Nommer administrateur") : null,
+      m.role === "admin" ? h("button", { class: "btn", onclick: () => { sh.remove(); setRole(m, "moderator", "Passé modérateur."); } }, "Passer modérateur") : null,
+      h("button", { class: "btn alt", style: "color:#FF8A80", onclick: () => { sh.remove(); if (confirm("Retirer " + p.display_name + " de l’équipe ?")) setRole(m, "subscriber", "Retiré de l’équipe."); } }, "Retirer de l’équipe"),
+      h("button", { class: "btn alt", onclick: () => sh.remove() }, "Fermer"));
+  };
+  const search = h("input", { class: "inp", type: "search", "aria-label": "Chercher une personne", placeholder: "Chercher une personne par nom" });
+  const found = h("div");
+  const invite = async (p, r) => {
+    const x = await sb.rpc("invite_channel_staff", { p_channel: c.id, p_user: p.id, p_role: r });
+    toast(x.error ? (x.error.message || "Invitation impossible.") : "Invitation envoyée à " + p.display_name + ".");
+    if (!x.error) { search.value = ""; found.replaceChildren(); render(); }
+  };
+  let tm;
+  search.oninput = () => {
+    clearTimeout(tm);
+    tm = setTimeout(async () => {
+      const t = search.value.trim().replace(/[%,()]/g, "");
+      if (t.length < 2) { found.replaceChildren(); return; }
+      const { data } = await sb.from("profiles").select("id,display_name,avatar_url,verified").ilike("display_name", "%" + t + "%").neq("id", me.id).limit(15);
+      found.replaceChildren(...(data || []).map(p => person(p, null, sm("Admin", () => invite(p, "admin")), sm("Modérateur", () => invite(p, "moderator"), true))));
+    }, 300);
+  };
+  const render = async () => {
+    const { data: ms, error } = await sb.from("channel_members").select("user_id,role").eq("channel_id", c.id).in("role", ["owner", "admin", "moderator"]);
+    if (error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger l’équipe. Vérifie ta connexion.")); return; }
+    const [sr, pr] = await Promise.all([
+      sb.from("channel_members").select("user_id").eq("channel_id", c.id).eq("role", "subscriber").limit(50),
+      canManage ? sb.from("channel_invites").select("user_id,role").eq("channel_id", c.id).eq("status", "pending") : Promise.resolve({ data: [] })]);
+    const subs = sr.data || [], pend = pr.data || [];
+    const P = await people([...ms.map(m => m.user_id), ...subs.map(s => s.user_id), ...pend.map(i => i.user_id)]);
+    const get = id => P.get(id) || { display_name: "Membre" };
+    const ord = { owner: 0, admin: 1, moderator: 2 };
+    const els = [h("div", { class: "mut" }, "Équipe (" + ms.length + ")")];
+    ms.slice().sort((a, b) => ord[a.role] - ord[b.role]).forEach(m => {
+      const p = get(m.user_id), self = m.user_id === me.id;
+      const edit = canManage && !self && m.role !== "owner" && (role === "owner" || m.role === "moderator");
+      els.push(person(p, ROLE_FR[m.role] + (self ? " · toi" : ""), edit ? sm("Gérer", () => manage(m, p), true) : null));
+    });
+    if (pend.length) {
+      els.push(h("div", { class: "mut", style: "margin-top:8px" }, "Invitations en attente"));
+      pend.forEach(i => els.push(person(get(i.user_id), (i.role === "admin" ? "Administrateur" : "Modérateur") + " · en attente")));
+    }
+    if (canManage) els.push(h("div", { class: "mut", style: "margin-top:8px" }, "Inviter une personne dans l’équipe"), search, found);
+    els.push(h("div", { class: "mut", style: "margin-top:8px" }, "Abonnés" + (subs.length ? " (" + subs.length + (subs.length === 50 ? "+" : "") + ")" : "")));
+    if (!subs.length) els.push(h("p", { class: "mut" }, "Aucun abonné pour le moment."));
+    subs.forEach(s => {
+      const p = get(s.user_id);
+      els.push(person(p, null, sm("Retirer", async () => {
+        if (!confirm("Retirer " + p.display_name + " de la chaîne ?")) return;
+        const r = await sb.from("channel_members").delete().eq("channel_id", c.id).eq("user_id", s.user_id).select("user_id");
+        toast(!r.error && r.data && r.data.length ? "Retiré de la chaîne." : "Action impossible.");
+        render();
+      }, true)));
+    });
+    body.replaceChildren(...els);
+  };
+  render();
 }
 
 function chEditor(c) {
