@@ -1,0 +1,10 @@
+{
+  "appId": "com.bomoko.app",
+  "appName": "Bomoko",
+  "webDir": "www",
+  "server": {
+    "url": "https://safamuyulu-spec.github.io/Bomoko-/",
+    "cleartext": false,
+    "allowNavigation": ["safamuyulu-spec.github.io", "*.supabase.co"]
+  }
+}
