@@ -1,0 +1,91 @@
+
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/android.yml"
+      - "capacitor.config.json"
+      - "package.json"
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Installer Capacitor
+        run: npm install
+
+      - name: Page de secours (hors ligne)
+        run: |
+          mkdir -p www
+          cat > www/index.html <<'HTML'
+          <!doctype html><html lang="fr"><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <body style="background:#000;color:#F2EFE8;font:18px system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:24px">
+          <div><h1 style="color:#4CC9A0">Bomoko</h1><p>Connexion internet nécessaire.<br>Vérifie ton réseau puis relance l’application.</p></div></body></html>
+          HTML
+
+      - name: Créer le projet Android
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Autorisations (caméra, micro, vibreur)
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          for p in CAMERA RECORD_AUDIO MODIFY_AUDIO_SETTINGS VIBRATE; do
+            sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.${p}\" />\n</manifest>#" "$M"
+          done
+          sed -i 's#</manifest>#    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n</manifest>#' "$M"
+          cat "$M"
+
+      - name: Icône de l'application
+        continue-on-error: true
+        run: |
+          if [ -f icon-512.png ]; then
+            R=android/app/src/main/res
+            rm -rf "$R/mipmap-anydpi-v26"
+            for s in "mdpi 48" "hdpi 72" "xhdpi 96" "xxhdpi 144" "xxxhdpi 192"; do
+              set -- $s
+              rm -f "$R/mipmap-$1"/ic_launcher*
+              convert icon-512.png -resize "${2}x${2}" "$R/mipmap-$1/ic_launcher.png"
+              cp "$R/mipmap-$1/ic_launcher.png" "$R/mipmap-$1/ic_launcher_round.png"
+            done
+          fi
+
+      - name: Compiler l'APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Préparer le fichier
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk Bomoko.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bomoko-apk
+          path: Bomoko.apk
+
+      - name: Publier l'APK (lien de téléchargement)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Bomoko APK ${{ github.run_number }}
+          files: Bomoko.apk
+          make_latest: true
+          
