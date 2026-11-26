@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="2026-11-25a">
+<meta name="app-version" content="2026-11-26a">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
@@ -380,10 +380,10 @@ async function chatView(c, title, url) {
   const sub = h("div", { class: "mut ell" });
   const tn = h("div", { class: "ell", style: "font-weight:600" }, title);
   const callBtn = k => c.is_group ? null : h("button", { class: "btn alt", "aria-label": k === "audio" ? "Appel audio" : "Appel vidéo", style: "padding:0 10px;font-size:20px", onclick: () => startCall(c, title, url, k) }, k === "audio" ? "📞" : "📹");
+  const hdr = h("div", { style: "display:flex;align-items:center;gap:8px;min-width:0;flex:1" }, av(title, url, 40), h("div", { style: "min-width:0;flex:1" }, tn, sub));
   show(h("div", { class: "top" },
       h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: listView }, "←"),
-      av(title, url, 40),
-      h("div", { style: "min-width:0;flex:1" }, tn, sub),
+      hdr,
       callBtn("audio"), callBtn("video")),
     box, h("div", { class: "bar" },
       h("button", { class: "btn alt", "aria-label": "Joindre un fichier ou un contact", style: "padding:0 8px;font-size:22px", onclick: () => attachMenu(c, add) }, "📎"), inp,
@@ -393,6 +393,8 @@ async function chatView(c, title, url) {
   const { data: mem } = await withTimeout(sb.from("conversation_members").select("user_id,last_read_at,profiles(display_name,status,verified)").eq("conversation_id", c.id), 6000);
   for (const m of mem || []) { names[m.user_id] = m.profiles?.display_name || ""; reads[m.user_id] = m.last_read_at; }
   if (!c.is_group) sub.textContent = (mem || []).find(m => m.user_id !== me.id)?.profiles?.status || "";
+  { const other = (mem || []).find(m => m.user_id !== me.id);
+    if (!c.is_group && other) { hdr.style.cursor = "pointer"; hdr.setAttribute("role", "button"); hdr.onclick = () => userProfileView(other.user_id, () => chatView(c, title, url)); } }
   if (!c.is_group && (mem || []).find(m => m.user_id !== me.id)?.profiles?.verified) tn.append(badge());
 
   const seen = new Set();
@@ -461,7 +463,7 @@ async function chatView(c, title, url) {
     seen.add(m.id); lastAt = m.created_at;
     hist.push(m); if (hist.length > 60) hist.shift(); if (loaded) LS.set(ckey, hist);
     const mine = m.sender_id === me.id;
-    if (c.is_group && !mine) list.append(h("div", { class: "who" }, names[m.sender_id] || "Membre"));
+    if (c.is_group && !mine) list.append(h("div", { class: "who", role: "button", style: "cursor:pointer", onclick: () => userProfileView(m.sender_id, () => chatView(c, title, url)) }, names[m.sender_id] || "Membre"));
     if (m.media_path || m.shared_user_id) { list.append(rich(m, mine)); } else if (/^(📞|📹) Appel/.test(m.body)) {
       list.append(h("div", { class: "b" + (mine ? " me" : ""), style: "display:flex;flex-direction:column;gap:4px" }, m.body,
         h("button", { class: "btn alt", style: "height:34px;padding:0;text-align:left;color:inherit;text-decoration:underline", onclick: () => startCall(c, title, url, m.body.startsWith("📹") ? "video" : "audio") }, "Rappeler")));
@@ -543,8 +545,9 @@ async function newView(mode) {
     if (error) { body.replaceChildren(h("p", { class: "err" }, "Impossible de charger tes amis. Vérifie ta connexion.")); return null; }
     return data.map(f => { const sent = f.requester_id === me.id; return { id: f.id, status: f.status, dir: sent ? "sent" : "received", p: sent ? f.adr : f.req }; });
   };
-  const rowEl = (p, ...acts) => h("div", { class: "row", style: "padding:10px 0" }, av(p.display_name, p.avatar_url),
-    h("div", { class: "grow ell", style: "font-weight:600" }, p.display_name, p.verified ? badge() : null), ...acts);
+  const rowEl = (p, ...acts) => h("div", { class: "row", style: "padding:10px 0" },
+    h("div", { class: "grow", role: "button", style: "display:flex;align-items:center;gap:12px;cursor:pointer;min-width:0", onclick: () => userProfileView(p.id, () => newView()) },
+      av(p.display_name, p.avatar_url), h("div", { class: "ell", style: "font-weight:600" }, p.display_name, p.verified ? badge() : null)), ...acts);
   const sm = (t, fn, alt) => h("button", { class: "btn" + (alt ? " alt" : ""), style: "height:38px;padding:0 12px;font-size:14px", onclick: fn }, t);
   const act = async (fn, ok) => {
     const r = await fn();
@@ -965,33 +968,75 @@ async function shareContact(c, add) {
 }
 
 // Fiche d'une personne : demander en ami, accepter ou écrire
-async function friendSheet(uid) {
-  if (uid === me.id) return toast("C’est ton propre profil.");
-  const [pr, fr] = await Promise.all([
-    sb.from("profiles").select("id,display_name,avatar_url,status").eq("id", uid).maybeSingle(),
+// ---------- Profil d'une personne (comme sur les réseaux sociaux) ----------
+async function userProfileView(uid, back) {
+  if (uid === me.id) return profView();
+  stop();
+  const goBack = back || listView;
+  const reload = () => userProfileView(uid, back);
+  const body = h("div", { class: "body pad", style: "gap:14px" }, h("p", { class: "mut" }, "Chargement…"));
+  show(h("div", { class: "top" },
+    h("button", { class: "btn alt", "aria-label": "Retour", style: "padding:0 8px", onclick: goBack }, "←"),
+    h("div", { style: "font-weight:600;font-size:18px;flex:1" }, "Profil")), body);
+  const now = new Date().toISOString();
+  const [pr, fq, shR, chR, stR] = await Promise.all([
+    sb.from("profiles").select("id,display_name,avatar_url,status,verified,created_at").eq("id", uid).maybeSingle(),
     sb.from("friendships").select("id,requester_id,addressee_id,status")
-      .or("and(requester_id.eq." + me.id + ",addressee_id.eq." + uid + "),and(requester_id.eq." + uid + ",addressee_id.eq." + me.id + ")").maybeSingle()]);
-  const p = pr.data, rel = fr.data;
-  if (!p) return toast("Profil introuvable.");
-  let act;
-  if (!rel) act = h("button", { class: "btn", onclick: async () => {
-    const { error } = await sb.from("friendships").insert({ requester_id: me.id, addressee_id: uid });
-    sh.remove(); toast(error ? "Demande impossible." : "Demande envoyée.");
-  } }, "Envoyer une demande d’ami");
-  else if (rel.status === "accepted") act = h("button", { class: "btn", onclick: async () => {
+      .or("and(requester_id.eq." + me.id + ",addressee_id.eq." + uid + "),and(requester_id.eq." + uid + ",addressee_id.eq." + me.id + ")").maybeSingle(),
+    sb.from("shops").select("id,owner_id,slug,name,category,city,currency,logo_path,is_open").eq("owner_id", uid).order("created_at", { ascending: false }).limit(10),
+    sb.from("channels").select(CH_COLS).eq("owner_id", uid).eq("is_public", true).limit(10),
+    sb.from("statuses").select("*,profiles!author_id(display_name,avatar_url,verified)").eq("author_id", uid).gt("expires_at", now).order("created_at", { ascending: true })]);
+  const p = pr.data;
+  if (!p) { body.replaceChildren(h("p", { class: pr.error ? "err" : "mut" }, pr.error ? "Impossible de charger ce profil. Vérifie ta connexion." : "Profil introuvable.")); return; }
+  const rel = fq.data;
+  const act = async (fn, ok) => {
+    const r = await fn();
+    toast(r && r.error ? "Action impossible. Réessaie." : ok);
+    reload();
+  };
+  const chat = async () => {
     const { data, error } = await sb.rpc("start_direct_chat", { other: uid });
-    if (error) return toast("Impossible d’ouvrir la discussion.");
-    sh.remove(); chatView({ id: data, is_group: false }, p.display_name, p.avatar_url);
-  } }, "Écrire");
-  else if (rel.requester_id === me.id) act = h("div", { class: "mut", style: "text-align:center" }, "Demande déjà envoyée");
-  else act = h("button", { class: "btn", onclick: async () => {
-    const { error } = await sb.from("friendships").update({ status: "accepted" }).eq("id", rel.id);
-    sh.remove(); toast(error ? "Action impossible." : "Ami ajouté.");
-  } }, "Accepter la demande");
-  const sh = sheetEl(h("div", { style: "display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center" },
-    av(p.display_name, p.avatar_url, 96), h("div", { style: "font-size:20px;font-weight:600" }, p.display_name),
-    p.status && h("div", { class: "mut" }, p.status)), act);
+    if (error) { toast("Impossible d’ouvrir la discussion."); return null; }
+    return { id: data, is_group: false };
+  };
+  const big = h("div", { style: "align-self:center" }, av(p.display_name, p.avatar_url, 120));
+  if (p.avatar_url) {
+    big.style.cursor = "pointer";
+    big.onclick = () => {
+      const o = h("div", { class: "ov", style: "z-index:8;align-items:center;justify-content:center;padding:12px", onclick: () => o.remove() },
+        h("img", { src: p.avatar_url, alt: p.display_name, style: "max-width:100%;max-height:100%;object-fit:contain" }));
+      $.append(o);
+    };
+  }
+  const acts = [];
+  if (!rel) acts.push(h("button", { class: "btn", style: "flex:1", onclick: () => act(() => sb.from("friendships").insert({ requester_id: me.id, addressee_id: uid }), "Demande envoyée.") }, "Ajouter en ami"));
+  else if (rel.status === "accepted") {
+    acts.push(h("button", { class: "btn", style: "flex:1", onclick: async () => { const c = await chat(); if (c) chatView(c, p.display_name, p.avatar_url); } }, "Écrire"));
+    ["audio", "video"].forEach(k => acts.push(h("button", { class: "btn alt", "aria-label": k === "audio" ? "Appel audio" : "Appel vidéo", style: "border:1px solid var(--in);padding:0 14px;font-size:20px",
+      onclick: async () => { const c = await chat(); if (c) startCall(c, p.display_name, p.avatar_url, k); } }, k === "audio" ? "📞" : "📹")));
+  } else if (rel.requester_id === me.id) acts.push(h("div", { class: "mut", style: "flex:1;text-align:center" }, "Demande d’ami envoyée"));
+  else acts.push(h("button", { class: "btn", style: "flex:1", onclick: () => act(() => sb.from("friendships").update({ status: "accepted" }).eq("id", rel.id), "Ami ajouté.") }, "Accepter la demande"));
+
+  const sec = t => h("div", { class: "mut", style: "margin-top:6px" }, t);
+  const els = [big,
+    h("div", { style: "text-align:center" },
+      h("div", { style: "font-size:22px;font-weight:600;overflow-wrap:anywhere" }, p.display_name, p.verified ? badge() : null),
+      p.status ? h("div", { class: "mut", style: "margin-top:4px;overflow-wrap:anywhere" }, p.status) : null,
+      p.created_at ? h("div", { class: "mut", style: "font-size:13px;margin-top:4px" }, "Sur Bomoko depuis " + new Date(p.created_at).toLocaleDateString("fr", { month: "long", year: "numeric" })) : null),
+    h("div", { style: "display:flex;gap:8px;align-items:center" }, ...acts)];
+  const sts = stR.data || [];
+  if (sts.length) els.push(h("button", { class: "btn alt", style: "border:1px solid var(--gl)", onclick: () => openStatus(sts, 0) }, "Voir son statut (" + sts.length + ")"));
+  const shops = shR.data || [];
+  if (shops.length) els.push(sec("Boutiques"), ...shops.map(s => shopRow(s, reload)));
+  const chans = chR.data || [];
+  if (chans.length) els.push(sec("Chaînes"), ...chans.map(c => chRow(c, nAbo(c.subscribers_count) + (c.category ? " · " + c.category : ""), null, () => chView(c, reload))));
+  els.push(h("button", { class: "btn alt", onclick: () => shareLink(location.origin + location.pathname + "?add=" + uid, p.display_name) }, "Partager ce profil"));
+  if (rel && rel.status === "accepted") els.push(h("button", { class: "btn alt", style: "color:#FF8A80", onclick: () => { if (confirm("Retirer " + p.display_name + " de tes amis ?")) act(() => sb.from("friendships").delete().eq("id", rel.id), "Ami retiré."); } }, "Retirer des amis"));
+  body.replaceChildren(...els);
 }
+
+// Ouvre le profil d'une personne (utilisé par les liens, les codes QR et les boutiques)
+async function friendSheet(uid, back) { return userProfileView(uid, back || listView); }
 
 // Mon code QR
 function showMyQr() {
@@ -1123,7 +1168,7 @@ async function openStatus(list, i = 0) {
     h("div", { style: "display:flex;gap:4px;padding:calc(8px + env(safe-area-inset-top)) 12px 0" },
       list.map((_, k) => h("div", { style: "flex:1;height:3px;border-radius:2px;background:" + (k <= i ? "#fff" : "#555") }))),
     h("div", { class: "top", style: "background:none;border:0" },
-      av(name, mine ? profile?.avatar_url : s.profiles?.avatar_url, 40),
+      (() => { const a = av(name, mine ? profile?.avatar_url : s.profiles?.avatar_url, 40); if (!mine) { a.style.cursor = "pointer"; a.onclick = () => { ov.remove(); userProfileView(s.author_id, statusView); }; } return a; })(),
       h("div", { style: "flex:1;min-width:0" }, h("div", { class: "ell", style: "font-weight:600" }, name, (!mine && s.profiles?.verified) ? badge() : null), h("div", { class: "mut" }, fmt(s.created_at))),
       h("button", { class: "btn alt", "aria-label": "Fermer", style: "padding:0 10px", onclick: close }, "✕")),
     bodyEl, foot);
@@ -1623,7 +1668,8 @@ async function teamView(c, role, back) {
     const { data } = await sb.from("profiles").select("id,display_name,avatar_url,verified").in("id", ids);
     return new Map((data || []).map(p => [p.id, p]));
   };
-  const person = (p, sub, ...acts) => h("div", { class: "row", style: "padding:8px 0" }, av(p.display_name, p.avatar_url),
+  const person = (p, sub, ...acts) => h("div", { class: "row", style: "padding:8px 0" },
+    (() => { const a = av(p.display_name, p.avatar_url); if (p.id && p.id !== me.id) { a.style.cursor = "pointer"; a.onclick = () => userProfileView(p.id, () => teamView(c, role, back)); } return a; })(),
     h("div", { class: "grow" }, h("div", { class: "ell", style: "font-weight:600" }, p.display_name, p.verified ? badge() : null),
       sub ? h("div", { class: "mut", style: "font-size:13px" }, sub) : null), ...acts);
   const setRole = async (m, r, ok) => {
@@ -2018,7 +2064,7 @@ async function shopView(slug, back) {
   const info = [s.description && h("p", { style: "margin:0;line-height:1.5" }, s.description),
     s.hours && h("div", { class: "mut" }, "Horaires : " + s.hours), s.phone && h("div", { class: "mut" }, "Téléphone : " + s.phone)].filter(Boolean);
   const acts = h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" },
-    me && !mine ? h("button", { class: "btn", style: "flex:1", onclick: () => friendSheet(s.owner_id) }, "Écrire au vendeur") : null,
+    me && !mine ? h("button", { class: "btn", style: "flex:1", onclick: () => friendSheet(s.owner_id, () => shopView(slug, back)) }, "Écrire au vendeur") : null,
     !me ? h("button", { class: "btn", style: "flex:1", onclick: () => { pendingShop = s.slug; authView(false); } }, "Se connecter pour écrire") : null,
     h("button", { class: "btn alt", onclick: () => shareLink(shopShare(s.slug), s.name) }, "Partager"),
     mine ? h("button", { class: "btn alt", onclick: myShopView }, "Gérer") : null);
@@ -2219,7 +2265,7 @@ async function orderDetail(id, mode) {
     h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { class: "mut" }, "Paiement :"), payChip(o.payment_status)),
     o.note ? h("div", {}, h("div", { class: "mut", style: "font-size:13px" }, "Message de l’acheteur"), h("div", { style: "white-space:pre-wrap" }, o.note)) : null,
     ...acts,
-    other && me && other.id !== me.id ? h("button", { class: "btn alt", onclick: () => friendSheet(other.id) }, sell ? "Écrire à l’acheteur" : "Écrire au vendeur") : null,
+    other && me && other.id !== me.id ? h("button", { class: "btn alt", onclick: () => friendSheet(other.id, () => orderDetail(id, mode)) }, sell ? "Écrire à l’acheteur" : "Écrire au vendeur") : null,
     h("div", { class: "mut", style: "font-size:13px" }, "Tu peux payer en Mobile Money (mode test pour l’instant) ou directement au vendeur. La livraison se règle avec le vendeur."));
 }
 
